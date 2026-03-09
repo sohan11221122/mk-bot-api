@@ -48,18 +48,24 @@ def run_mk_bot():
             driver.find_element(By.ID, "t-btnlog").click()
             
         time.sleep(5)
-        print("[+] Login Successful!")
+        print("[+] Login Successful! Going to Get Number Page...")
         
         driver.get("http://mknetworkbd.com/getnum.php")
         time.sleep(5)
 
         while True:
             try:
-                # 🟢 ১. সিগন্যাল চেক এবং ১০০% কনফার্ম নতুন নাম্বার নেওয়া
+                # 🟢 ১. সিগন্যাল চেক 
                 try:
-                    sig_res = requests.get(f"{API_BRIDGE_URL}?action=check_signal", timeout=5).json()
+                    # এখানে timeout একটু বাড়িয়ে দিলাম এবং এরর প্রিন্ট করার অপশন দিলাম
+                    sig_res = requests.get(f"{API_BRIDGE_URL}?action=check_signal", timeout=10).json()
+                    
                     if sig_res.get("signal") == "GET":
-                        print("[*] 🔔 PC Bot requested a new number! Clicking GET NUMBER...")
+                        print("\n=============================================")
+                        print("[*] 🔔 SIGNAL RECEIVED! Clicking GET NUMBER...")
+                        print("=============================================\n")
+                        
+                        # সিগন্যাল রিসেট করা
                         requests.get(f"{API_BRIDGE_URL}?action=signal_received", timeout=5)
                         
                         target_range = requests.get(f"{API_BRIDGE_URL}?action=get_range", timeout=5).json().get('range', '')
@@ -75,7 +81,7 @@ def run_mk_bot():
                         get_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'GET NUMBER')]")
                         driver.execute_script("arguments[0].click();", get_btn)
                         
-                        # 🟢 NEW: Smart Wait - নতুন নাম্বার না আসা পর্যন্ত ওয়েট করবে (Max 15 sec)
+                        # Smart Wait
                         print("[*] Waiting for table to update with fresh number...")
                         for _ in range(15):
                             time.sleep(1)
@@ -83,9 +89,9 @@ def run_mk_bot():
                             if curr_rows and curr_rows[0].text != old_top:
                                 break
                         
-                        time.sleep(1) # Extra safety margin
+                        time.sleep(1) 
                         
-                        # শুধুমাত্র নতুন আপডেট হওয়া প্রথম রো (Row) থেকে নাম্বার নেওয়া
+                        # শুধুমাত্র নতুন আপডেট হওয়া প্রথম রো (Row) থেকে নাম্বার নেওয়া
                         rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
                         if rows:
                             cols = rows[0].find_elements(By.TAG_NAME, "td")
@@ -95,12 +101,14 @@ def run_mk_bot():
                                 phone = re.sub(r'[^0-9]', '', phone) 
                                 
                                 if phone:
-                                    print(f"[+] Fresh Number Sent to DB: {phone}")
+                                    print(f"\n[+] 🎉 FRESH NUMBER EXTRACTED: {phone}")
                                     payload = {"phone": phone, "status": "PENDING", "otp": "Waiting..."}
-                                    requests.post(f"{API_BRIDGE_URL}?action=save_number", json=payload, timeout=5)
-                except: pass
+                                    post_res = requests.post(f"{API_BRIDGE_URL}?action=save_number", json=payload, timeout=5)
+                                    print(f"[*] DB Response: {post_res.text}\n")
+                except Exception as check_e:
+                    print(f"[-] Signal Check Error: {check_e}")
 
-                # 🟢 ২. সবসময় প্রথম ২৫ লাইন স্ক্যান করে শুধুমাত্র রানিং নাম্বারের OTP আপডেট করা
+                # 🟢 ২. প্রথম ২৫ লাইন স্ক্যান করে রানিং নাম্বারের OTP আপডেট করা
                 rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
                 if rows:
                     bulk_data = []
@@ -125,14 +133,13 @@ def run_mk_bot():
                     
                     if bulk_data:
                         try:
-                            # ডাটাবেস শুধু এক্সিস্টিং নাম্বারের OTP আপডেট করবে
                             requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
                         except: pass
 
             except Exception as inner_e:
-                pass
+                print(f"[-] Main Loop Error: {inner_e}")
             
-            time.sleep(5) 
+            time.sleep(3) 
 
     except Exception as e:
         print(f"❌ Critical Bot Error: {e}")
