@@ -5,7 +5,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 import time
 import requests
 import threading
@@ -17,23 +16,31 @@ API_BRIDGE_URL = "http://sohan1020.onlinewebshop.net/api/api_bridge.php"
 
 def setup_browser():
     chrome_options = Options()
+    # 🟢 Render-এর জন্য Headless এবং অন্যান্য সেটিং
+    chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
     
-    service = Service(ChromeDriverManager().install())
+    # 🟢 Render সার্ভারের নিজস্ব Chromium ব্রাউজারের লোকেশন
+    chrome_options.binary_location = "/usr/bin/chromium" 
+    service = Service("/usr/bin/chromedriver")
+    
     return webdriver.Chrome(service=service, options=chrome_options)
 
 def run_mk_bot():
-    print("🚀 Smart Cloud Bot Started...")
-    driver = setup_browser()
-    wait = WebDriverWait(driver, 15)
+    print("🚀 Smart Cloud Bot Started for Render...")
     
     try:
+        driver = setup_browser()
+        wait = WebDriverWait(driver, 15)
+        
         print("[*] Logging in to MK Network...")
         driver.get("http://mknetworkbd.com/auth.php")
         time.sleep(4)
         
+        # লগইন বাইপাস (JS Injection)
         driver.execute_script("""
             var e = document.getElementsByName('phone_email')[0];
             if(e) e.value = 'sohan.shahel.sifa@gmail.com';
@@ -57,7 +64,6 @@ def run_mk_bot():
             try:
                 # 🟢 ১. সিগন্যাল চেক 
                 try:
-                    # এখানে timeout একটু বাড়িয়ে দিলাম এবং এরর প্রিন্ট করার অপশন দিলাম
                     sig_res = requests.get(f"{API_BRIDGE_URL}?action=check_signal", timeout=10).json()
                     
                     if sig_res.get("signal") == "GET":
@@ -144,12 +150,16 @@ def run_mk_bot():
     except Exception as e:
         print(f"❌ Critical Bot Error: {e}")
     finally:
-        driver.quit()
+        try:
+            driver.quit()
+        except:
+            pass
 
 @app.route('/')
 def home():
-    return jsonify({"status": "Cloud Bot is Running!"})
+    return jsonify({"status": "Cloud Bot is Running successfully on Render!"})
 
 if __name__ == '__main__':
     threading.Thread(target=run_mk_bot, daemon=True).start()
-    app.run(host='0.0.0.0', port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
