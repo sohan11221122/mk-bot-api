@@ -25,7 +25,7 @@ def setup_browser():
     return webdriver.Chrome(service=service, options=chrome_options)
 
 def run_mk_bot():
-    print("🚀 Cloud Bot Started...")
+    print("🚀 Smart Cloud Bot Started...")
     driver = setup_browser()
     wait = WebDriverWait(driver, 15)
     
@@ -34,22 +34,17 @@ def run_mk_bot():
         driver.get("http://mknetworkbd.com/auth.php")
         time.sleep(4)
         
-        # 🟢 ১০০% ফিক্সড লগইন সিস্টেম (JavaScript Injection)
-        email = "sohan.shahel.sifa@gmail.com"
-        password = "Sohan123@@##"
-        
-        driver.execute_script(f"""
+        driver.execute_script("""
             var e = document.getElementsByName('phone_email')[0];
-            if(e) e.value = '{email}';
+            if(e) e.value = 'sohan.shahel.sifa@gmail.com';
             var p = document.getElementsByName('password')[0];
-            if(p) p.value = '{password}';
+            if(p) p.value = 'Sohan123@@##';
         """)
         time.sleep(1)
         
         try:
             driver.execute_script("document.getElementById('t-btnlog').click();")
         except:
-            print("[-] Button click failed via JS, trying normal click...")
             driver.find_element(By.ID, "t-btnlog").click()
             
         time.sleep(5)
@@ -60,7 +55,7 @@ def run_mk_bot():
 
         while True:
             try:
-                # ১. সিগন্যাল চেক এবং নতুন নাম্বার নেওয়া
+                # 🟢 ১. সিগন্যাল চেক এবং ১০০% কনফার্ম নতুন নাম্বার নেওয়া
                 try:
                     sig_res = requests.get(f"{API_BRIDGE_URL}?action=check_signal", timeout=5).json()
                     if sig_res.get("signal") == "GET":
@@ -71,12 +66,26 @@ def run_mk_bot():
                         if target_range:
                             driver.execute_script(f"document.querySelector('input[placeholder*=\"XXXXX\"]').value='{target_range}';")
                         
+                        # ক্লিক করার আগে পুরনো ১ নম্বর লাইন সেভ করে রাখা
+                        old_top = ""
+                        rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
+                        if rows: old_top = rows[0].text
+                        
                         # GET NUMBER ক্লিক
                         get_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'GET NUMBER')]")
                         driver.execute_script("arguments[0].click();", get_btn)
-                        time.sleep(8) 
                         
-                        # শুধুমাত্র প্রথম রো (Row) থেকে নাম্বার নেওয়া
+                        # 🟢 NEW: Smart Wait - নতুন নাম্বার না আসা পর্যন্ত ওয়েট করবে (Max 15 sec)
+                        print("[*] Waiting for table to update with fresh number...")
+                        for _ in range(15):
+                            time.sleep(1)
+                            curr_rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
+                            if curr_rows and curr_rows[0].text != old_top:
+                                break
+                        
+                        time.sleep(1) # Extra safety margin
+                        
+                        # শুধুমাত্র নতুন আপডেট হওয়া প্রথম রো (Row) থেকে নাম্বার নেওয়া
                         rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
                         if rows:
                             cols = rows[0].find_elements(By.TAG_NAME, "td")
@@ -91,7 +100,7 @@ def run_mk_bot():
                                     requests.post(f"{API_BRIDGE_URL}?action=save_number", json=payload, timeout=5)
                 except: pass
 
-                # ২. সবসময় প্রথম ২৫ লাইন স্ক্যান করে শুধুমাত্র রানিং নাম্বারের OTP আপডেট করা
+                # 🟢 ২. সবসময় প্রথম ২৫ লাইন স্ক্যান করে শুধুমাত্র রানিং নাম্বারের OTP আপডেট করা
                 rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
                 if rows:
                     bulk_data = []
