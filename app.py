@@ -16,14 +16,14 @@ API_BRIDGE_URL = "http://sohan1020.onlinewebshop.net/api/api_bridge.php"
 
 def setup_browser():
     chrome_options = Options()
-    # 🟢 Render-এর জন্য Headless এবং অন্যান্য সেটিং
-    chrome_options.add_argument("--headless") 
+    # Render-এর জন্য প্রয়োজনীয় সেটিংস
+    chrome_options.add_argument("--headless=new") # New headless mode
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
     
-    # 🟢 Render সার্ভারের নিজস্ব Chromium ব্রাউজারের লোকেশন
+    # Render সার্ভারে Chromium এর লোকেশন
     chrome_options.binary_location = "/usr/bin/chromium" 
     service = Service("/usr/bin/chromedriver")
     
@@ -32,128 +32,144 @@ def setup_browser():
 def run_mk_bot():
     print("🚀 Smart Cloud Bot Started for Render...")
     
-    try:
-        driver = setup_browser()
-        wait = WebDriverWait(driver, 15)
-        
-        print("[*] Logging in to MK Network...")
-        driver.get("http://mknetworkbd.com/auth.php")
-        time.sleep(4)
-        
-        # লগইন বাইপাস (JS Injection)
-        driver.execute_script("""
-            var e = document.getElementsByName('phone_email')[0];
-            if(e) e.value = 'sohan.shahel.sifa@gmail.com';
-            var p = document.getElementsByName('password')[0];
-            if(p) p.value = 'Sohan123@@##';
-        """)
-        time.sleep(1)
-        
+    while True: # Main Loop to restart driver if it crashes
+        driver = None
         try:
-            driver.execute_script("document.getElementById('t-btnlog').click();")
-        except:
-            driver.find_element(By.ID, "t-btnlog").click()
+            driver = setup_browser()
+            wait = WebDriverWait(driver, 15)
             
-        time.sleep(5)
-        print("[+] Login Successful! Going to Get Number Page...")
-        
-        driver.get("http://mknetworkbd.com/getnum.php")
-        time.sleep(5)
-
-        while True:
+            print("[*] Logging in to MK Network...")
+            driver.get("http://mknetworkbd.com/auth.php")
+            time.sleep(4)
+            
+            # Login Bypass (Fixed: Using Placeholder)
+            driver.execute_script("""
+                var e = document.querySelector("input[placeholder='Enter phone or email']");
+                if(e) e.value = 'sohan.shahel.sifa@gmail.com';
+                var p = document.querySelector("input[placeholder='Enter password']");
+                if(p) p.value = 'Sohan123@@##';
+            """)
+            time.sleep(1)
+            
+            # Login Click (Fixed: Trying ID first)
             try:
-                # 🟢 ১. সিগন্যাল চেক 
+                driver.execute_script("document.getElementById('t-btnlog').click();")
+            except:
                 try:
-                    sig_res = requests.get(f"{API_BRIDGE_URL}?action=check_signal", timeout=10).json()
-                    
-                    if sig_res.get("signal") == "GET":
-                        print("\n=============================================")
-                        print("[*] 🔔 SIGNAL RECEIVED! Clicking GET NUMBER...")
-                        print("=============================================\n")
+                    driver.find_element(By.XPATH, "//button[contains(text(), 'Login')]").click()
+                except:
+                    print("[-] Login button click failed, trying submit...")
+                    driver.execute_script("document.forms[0].submit();")
+                
+            time.sleep(5)
+            
+            if "auth.php" in driver.current_url:
+                print("❌ Login Failed! Check credentials.")
+                driver.quit()
+                time.sleep(60)
+                continue
+                
+            print("[+] Login Successful! Going to Get Number Page...")
+            
+            driver.get("http://mknetworkbd.com/getnum.php")
+            time.sleep(5)
+
+            # Inner Loop for polling
+            while True:
+                try:
+                    # ১. সিগন্যাল চেক
+                    try:
+                        sig_res = requests.get(f"{API_BRIDGE_URL}?action=check_signal", timeout=10).json()
                         
-                        # সিগন্যাল রিসেট করা
-                        requests.get(f"{API_BRIDGE_URL}?action=signal_received", timeout=5)
-                        
-                        target_range = requests.get(f"{API_BRIDGE_URL}?action=get_range", timeout=5).json().get('range', '')
-                        if target_range:
-                            driver.execute_script(f"document.querySelector('input[placeholder*=\"XXXXX\"]').value='{target_range}';")
-                        
-                        # ক্লিক করার আগে পুরনো ১ নম্বর লাইন সেভ করে রাখা
-                        old_top = ""
-                        rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
-                        if rows: old_top = rows[0].text
-                        
-                        # GET NUMBER ক্লিক
-                        get_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'GET NUMBER')]")
-                        driver.execute_script("arguments[0].click();", get_btn)
-                        
-                        # Smart Wait
-                        print("[*] Waiting for table to update with fresh number...")
-                        for _ in range(15):
-                            time.sleep(1)
-                            curr_rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
-                            if curr_rows and curr_rows[0].text != old_top:
-                                break
-                        
-                        time.sleep(1) 
-                        
-                        # শুধুমাত্র নতুন আপডেট হওয়া প্রথম রো (Row) থেকে নাম্বার নেওয়া
-                        rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
-                        if rows:
-                            cols = rows[0].find_elements(By.TAG_NAME, "td")
-                            if len(cols) >= 3: 
-                                try: phone = cols[0].find_element(By.TAG_NAME, "span").text.strip()
-                                except: phone = cols[0].text.strip()
-                                phone = re.sub(r'[^0-9]', '', phone) 
+                        if sig_res.get("signal") == "GET":
+                            print("\n=============================================")
+                            print("[*] 🔔 SIGNAL RECEIVED! Clicking GET NUMBER...")
+                            print("=============================================\n")
+                            
+                            # সিগন্যাল রিসেট
+                            requests.get(f"{API_BRIDGE_URL}?action=signal_received", timeout=5)
+                            
+                            # রেঞ্জ সেট
+                            target_range = requests.get(f"{API_BRIDGE_URL}?action=get_range", timeout=5).json().get('range', '')
+                            if target_range:
+                                driver.execute_script(f"document.querySelector('input[placeholder*=\"XXXXX\"]').value='{target_range}';")
+
+                            # পুরনো রো সেভ
+                            old_rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
+                            old_top_text = old_rows[0].text if old_rows else ""
+
+                            # GET NUMBER ক্লিক (Fixed: ID 'getBtn')
+                            try:
+                                driver.execute_script("document.getElementById('getBtn').click();")
+                            except:
+                                driver.find_element(By.XPATH, "//button[contains(text(), 'GET NUMBER')]").click()
+                            
+                            print("[*] Waiting for table to update...")
+                            for _ in range(15):
+                                time.sleep(1)
+                                curr_rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
+                                if curr_rows and curr_rows[0].text != old_top_text:
+                                    break
+                            
+                            # নতুন নাম্বার এক্সট্রাক্ট
+                            rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
+                            if rows:
+                                cols = rows[0].find_elements(By.TAG_NAME, "td")
+                                if len(cols) >= 1: 
+                                    # নাম্বার প্রথম কলাম থেকে নেওয়া
+                                    raw_text = cols[0].text
+                                    phone = re.sub(r'[^0-9]', '', raw_text.split('\n')[0])
+                                    
+                                    if phone:
+                                        print(f"\n[+] 🎉 FRESH NUMBER EXTRACTED: {phone}")
+                                        payload = {"phone": phone, "status": "PENDING", "otp": "Waiting..."}
+                                        post_res = requests.post(f"{API_BRIDGE_URL}?action=save_number", json=payload, timeout=5)
+                                        print(f"[*] DB Response: {post_res.text}\n")
+                    except Exception as check_e:
+                        print(f"[-] Signal Check Error: {check_e}")
+
+                    # ২. OTP আপডেট (Bulk Scan)
+                    rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
+                    if rows:
+                        bulk_data = []
+                        for row in rows[:25]:
+                            cols = row.find_elements(By.TAG_NAME, "td")
+                            if len(cols) >= 2: 
+                                raw_text = cols[0].text
+                                phone = re.sub(r'[^0-9]', '', raw_text.split('\n')[0])
+                                
+                                status_text = cols[1].text.strip()
+                                otp = "N/A"
+                                match = re.search(r'\b\d{4,6}\b', status_text) 
+                                if match: otp = match.group(0)
+                                
+                                net_status = "PENDING"
+                                if "SUCCESS" in status_text.upper() or otp != "N/A": net_status = "SUCCESS"
+                                elif "CANCELED" in status_text.upper() or "EXPIRED" in status_text.upper(): net_status = "FAILED"
                                 
                                 if phone:
-                                    print(f"\n[+] 🎉 FRESH NUMBER EXTRACTED: {phone}")
-                                    payload = {"phone": phone, "status": "PENDING", "otp": "Waiting..."}
-                                    post_res = requests.post(f"{API_BRIDGE_URL}?action=save_number", json=payload, timeout=5)
-                                    print(f"[*] DB Response: {post_res.text}\n")
-                except Exception as check_e:
-                    print(f"[-] Signal Check Error: {check_e}")
+                                    bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
+                        
+                        if bulk_data:
+                            try:
+                                requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
+                            except: pass
 
-                # 🟢 ২. প্রথম ২৫ লাইন স্ক্যান করে রানিং নাম্বারের OTP আপডেট করা
-                rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
-                if rows:
-                    bulk_data = []
-                    for row in rows[:25]:
-                        cols = row.find_elements(By.TAG_NAME, "td")
-                        if len(cols) >= 3: 
-                            try: phone = cols[0].find_element(By.TAG_NAME, "span").text.strip()
-                            except: phone = cols[0].text.strip()
-                            phone = re.sub(r'[^0-9]', '', phone) 
-                            
-                            status_text = cols[1].text.strip()
-                            otp = "N/A"
-                            match = re.search(r'\b\d{4,6}\b', status_text) 
-                            if match: otp = match.group(0)
-                            
-                            net_status = "PENDING"
-                            if "SUCCESS" in status_text.upper() or otp != "N/A": net_status = "SUCCESS"
-                            elif "CANCELED" in status_text.upper() or "EXPIRED" in status_text.upper(): net_status = "FAILED"
-                            
-                            if phone:
-                                bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
-                    
-                    if bulk_data:
-                        try:
-                            requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
-                        except: pass
+                except Exception as inner_e:
+                    print(f"[-] Inner Loop Error: {inner_e}")
+                    # যদি সেশন এক্সপায়ার হয় তাহলে ব্রেক করে আউটার লুপে গিয়ে রিলগইন করবে
+                    if "no such window" in str(inner_e).lower() or "session deleted" in str(inner_e).lower():
+                        break
+                
+                time.sleep(3)
 
-            except Exception as inner_e:
-                print(f"[-] Main Loop Error: {inner_e}")
-            
-            time.sleep(3) 
-
-    except Exception as e:
-        print(f"❌ Critical Bot Error: {e}")
-    finally:
-        try:
-            driver.quit()
-        except:
-            pass
+        except Exception as e:
+            print(f"❌ Critical Bot Error: {e}")
+            if driver:
+                try: driver.quit()
+                except: pass
+            print("[*] Restarting bot in 10 seconds...")
+            time.sleep(10)
 
 @app.route('/')
 def home():
