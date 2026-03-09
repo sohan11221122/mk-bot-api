@@ -18,7 +18,7 @@ API_BRIDGE_URL = "http://sohan1020.onlinewebshop.net/api/api_bridge.php"
 
 def setup_browser():
     chrome_options = Options()
-    # Render বা সার্ভারের জন্য প্রয়োজনীয় আর্গুমেন্ট
+    # Render বা সার্ভারের জন্য প্রয়োজনীয় আর্গুমেন্ট
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -26,11 +26,11 @@ def setup_browser():
     chrome_options.add_argument("--window-size=1920,1080")
     
     # Render সাধারণত Chromium ব্যবহার করে
-    # যদি লোকাল PC তে রান করেন তাহলে এই লাইন দুটি কমেন্ট করে দিন
+    # যদি লোকাল PC তে রান করেন তাহলে এই ২ লাইন কমেন্ট করে দিন
     chrome_options.binary_location = "/usr/bin/chromium" 
     service = Service("/usr/bin/chromedriver")
     
-    # যদি লোকাল PC তে রান করান, তাহলে নিচের লাইনটি ব্যবহার করুন (কমেন্ট সরিয়ে)
+    # যদি লোকাল PC তে রান করান, তাহলে নিচের লাইনটি ব্যবহার করুন (কমেন্ট সরিয়ে)
     # from webdriver_manager.chrome import ChromeDriverManager
     # service = Service(ChromeDriverManager().install())
 
@@ -47,7 +47,7 @@ def run_mk_bot():
         driver.get("http://mknetworkbd.com/auth.php")
         time.sleep(5)
         
-        # JS দিয়ে ইনপুট ফিল করা (সবচেয়ে স্টেবল মেথড)
+        # JS দিয়ে ইনপুট ফিল করা (সবচেয়ে স্টেবল মেথড)
         email = "sohan.shahel.sifa@gmail.com"
         password = "Sohan123@@##"
         
@@ -70,7 +70,7 @@ def run_mk_bot():
         time.sleep(5)
         print("[+] Login Successful!")
 
-        # ২. গেট নাম্বার পেজে যাওয়া
+        # ২. গেট নাম্বার পেজে যাওয়া
         driver.get("http://mknetworkbd.com/getnum.php")
         time.sleep(3)
 
@@ -89,29 +89,42 @@ def run_mk_bot():
                 print(f"[*] Setting Range: {target_range}")
                 driver.execute_script(f"document.querySelector('input[placeholder*=\"XXXXX\"]').value='{target_range}';")
                 
-                # আইডি দিয়ে ক্লিক (আগের সমস্যা সমাধান)
+                # আইডি দিয়ে ক্লিক (আগের সমস্যা সমাধান)
                 driver.execute_script("document.getElementById('getBtn').click();")
                 print("[+] GET NUMBER Clicked! Waiting for response...")
                 time.sleep(6) 
 
-                # ৩. টেবিল থেকে ডাটা রিড করা
-                rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
+                # ৩. টেবিল থেকে ডাটা রিড করা (নতুন আপডেটেড লজিক)
+                print("[*] Searching for numbers in the table...")
+                time.sleep(5) # টেবিল লোড হওয়ার জন্য সময়
+                
+                # শুধু tbody এর ভেতরের tr গুলো খুঁজুন
+                rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
+                
                 if rows:
                     first_row = rows[0]
+                    # পুরো Row-এর টেক্সট প্রিন্ট করুন ডিবাগিং এর জন্য
+                    print(f"[DEBUG] Row Text: {first_row.text}")
+                    
                     cols = first_row.find_elements(By.TAG_NAME, "td")
                     
-                    if len(cols) >= 1:
-                        # নাম্বার প্রিন্ট (প্রথম কলাম)
-                        phone = cols[0].text.strip()
+                    # সাধারণত ফোন নাম্বার, স্ট্যাটাস এবং অ্যাকশন কলাম থাকে
+                    if len(cols) >= 3: 
+                        try:
+                            phone = cols[0].find_element(By.TAG_NAME, "span").text.strip()
+                        except:
+                            phone = cols[0].text.strip()
                         
-                        status_text = ""
-                        if len(cols) >= 2:
-                            status_text = cols[1].text.strip()
+                        # নাম্বার থেকে স্পেস বা অন্য ক্যারেক্টার বাদ দেওয়া
+                        phone = re.sub(r'[^0-9]', '', phone) 
+                        
+                        status_text = cols[1].text.strip()
                         
                         # OTP বের করার লজিক
-                        row_text = first_row.text
-                        match = re.search(r'\b\d{4,6}\b', row_text)
-                        otp = match.group(0) if match else "N/A"
+                        otp = "N/A"
+                        match = re.search(r'\b\d{4,6}\b', status_text) 
+                        if match:
+                             otp = match.group(0)
                         
                         # স্ট্যাটাস ঠিক করা
                         current_status = "PENDING"
@@ -120,28 +133,31 @@ def run_mk_bot():
                         elif "CANCELED" in status_text.upper() or "EXPIRED" in status_text.upper():
                             current_status = "FAILED"
                         
-                        print(f"📱 Number: {phone} | Status: {current_status} | OTP: {otp}")
+                        if phone:
+                            print(f"📱 Number: {phone} | Status: {current_status} | OTP: {otp}")
 
-                        # API তে ডাটা সেন্ড
-                        payload = {
-                            "phone": phone,
-                            "status": current_status,
-                            "otp": otp
-                        }
-                        try:
-                            requests.post(f"{API_BRIDGE_URL}?action=save_number", json=payload)
-                            print("[+] Data sent to API.")
-                        except Exception as api_err:
-                            print(f"[-] API Error: {api_err}")
+                            # API তে ডাটা সেন্ড
+                            payload = {
+                                "phone": phone,
+                                "status": current_status,
+                                "otp": otp
+                            }
+                            try:
+                                res = requests.post(f"{API_BRIDGE_URL}?action=save_number", json=payload)
+                                print(f"[+] Data sent to API. Response: {res.text}")
+                            except Exception as api_err:
+                                print(f"[-] API Error: {api_err}")
+                        else:
+                            print("[-] Could not extract phone number from column.")
                     else:
-                        print("[-] Table row empty.")
+                        print(f"[-] Table row does not have enough columns (found {len(cols)}).")
                 else:
                     print("[-] No rows found in table yet.")
 
             except Exception as inner_e:
                 print(f"[-] Loop Error: {inner_e}")
             
-            # পরবর্তী চেকের জন্য অপেক্ষা
+            # পরবর্তী চেকের জন্য অপেক্ষা (১০ সেকেন্ড পর পর চেক করবে)
             time.sleep(10) 
 
     except Exception as e:
@@ -151,7 +167,7 @@ def run_mk_bot():
 
 @app.route('/')
 def home():
-    return jsonify({"status": "MK Network Bot is Running!", "version": "5.3"})
+    return jsonify({"status": "MK Network Bot is Running!", "version": "5.4"})
 
 if __name__ == '__main__':
     # ব্যাকগ্রাউন্ড থ্রেডে বট চালু করা
@@ -159,5 +175,6 @@ if __name__ == '__main__':
     t.daemon = True
     t.start()
     
-    # ফ্লাস্ক অ্যাপ রান করা
-    app.run(host='0.0.0.0', port=10000)
+    # ফ্লাস্ক অ্যাপ রান করা (Render এ পোর্ট 10000 থাকে সাধারণত)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
