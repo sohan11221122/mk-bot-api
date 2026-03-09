@@ -9,43 +9,67 @@ app = Flask(__name__)
 API_BRIDGE_URL = "http://sohan1020.onlinewebshop.net/api/api_bridge.php"
 
 def run_mk_bot():
-    print("🚀 Super-Fast API Bot Started (No Browser!)...")
+    print("🚀 Super-Fast Magic API Bot Started...")
     
-    # সেশন তৈরি করা (যাতে লগইন কুকিজ সেভ থাকে)
+    # সেশন তৈরি করা (যাতে কুকিজ সেভ থাকে)
     session = requests.Session()
     
-    # সাধারণ ইউজারের মতো সাজার জন্য হেডার
+    # রিয়েল ব্রাউজারের মতো হেডার
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Content-Type": "application/x-www-form-urlencoded"
     }
     
     while True:
         try:
-            print("[*] Attempting to login via API...")
+            print("[*] Fetching Login Page to extract session & input names...")
             
-            # ⚠️ আপনার সাইটের লগইন ফর্মের ইনপুট নামগুলো (name="...") এখানে দিতে হবে
-            # সাধারণত email এবং password বা pass থাকে। 
+            # 🟢 ১. লগইনের আগে পেজ ভিজিট করা
+            res = session.get("http://mknetworkbd.com/auth.php", headers=headers, timeout=15)
+            html = res.text
+            
+            # 🟢 ২. Auto-Detect Logic (ইনপুটের নাম নিজে নিজে খুঁজে বের করবে)
+            inputs = re.findall(r'<input([^>]+)>', html, re.IGNORECASE)
+            email_name = "email"
+            pass_name = "password"
+            
+            for inp in inputs:
+                inp_lower = inp.lower()
+                name_match = re.search(r'name=["\']([^"\']+)["\']', inp, re.IGNORECASE)
+                if name_match:
+                    if 'type="password"' in inp_lower or "type='password'" in inp_lower:
+                        pass_name = name_match.group(1)
+                    elif 'type="text"' in inp_lower or 'type="email"' in inp_lower:
+                        if 'email' in inp_lower or 'user' in inp_lower or 'phone' in inp_lower:
+                            email_name = name_match.group(1)
+                            
+            print(f"[*] Auto-Detected Fields -> Email: '{email_name}', Password: '{pass_name}'")
+            
+            # 🟢 ৩. ডাইনামিক পেলোড তৈরি ও লগইন রিকোয়েস্ট
             login_payload = {
-                "email": "sohan.shahel.sifa@gmail.com", 
-                "password": "Sohan123@@##",
-                "login": "1" # লগইন বাটনের ভ্যালু (যদি থাকে)
+                email_name: "sohan.shahel.sifa@gmail.com",
+                pass_name: "Sohan123@@##",
+                "login": "1",
+                "submit": "1",
+                "t-btnlog": "1"
             }
             
-            # লগইন রিকোয়েস্ট পাঠানো
+            print("[*] Sending Login Request...")
             login_res = session.post("http://mknetworkbd.com/auth.php", data=login_payload, headers=headers, timeout=15)
             
             # লগইন সফল হয়েছে কিনা চেক করা
-            if "login" in login_res.url.lower() or "invalid" in login_res.text.lower():
-                print("❌ Login Failed! Password/Email wrong or Payload names don't match. Retrying in 30s...")
+            if "dashboard" not in login_res.text.lower() and "logout" not in login_res.text.lower():
+                print("❌ Login Failed! Retrying in 30s...")
                 time.sleep(30)
                 continue
                 
             print("[+] Login OK! Session Secured. Polling for numbers...")
             
+            # 🟢 ৪. মেইন লুপ (নাম্বার ও ওটিপি আনা)
             while True:
                 try:
-                    # 🟢 ১. Signal Check (ডেস্কটপ থেকে নাম্বার চাইছে কিনা)
+                    # Signal Check
                     sig_res = requests.get(f"{API_BRIDGE_URL}?action=check_signal", timeout=10).json()
                     
                     if sig_res.get("signal") == "GET":
@@ -54,29 +78,24 @@ def run_mk_bot():
                         
                         target_range = requests.get(f"{API_BRIDGE_URL}?action=get_range", timeout=5).json().get('range', '')
                         
-                        # নতুন নাম্বারের জন্য রিকোয়েস্ট (Get Number Button Click এর বিকল্প)
                         print(f"[*] Requesting new number...")
-                        # ⚠️ সাইটে Get Number বাটনে ক্লিক করলে যে রিকোয়েস্ট যায়, সেটা এখানে দিতে হবে
-                        num_payload = {"service": "fb", "range": target_range} 
+                        num_payload = {"service": "fb", "range": target_range, "getBtn": "1", "submit": "1"} 
                         session.post("http://mknetworkbd.com/getnum.php", data=num_payload, headers=headers, timeout=10)
 
-                    # 🟢 ২. Bulk OTP Update (Table থেকে ডেটা পড়া)
+                    # Bulk OTP Update
                     table_res = session.get("http://mknetworkbd.com/getnum.php", headers=headers, timeout=10)
                     
-                    # HTML টেবিল থেকে Regex দিয়ে নাম্বার ও OTP আলাদা করা
                     rows = re.findall(r'<tr.*?>(.*?)</tr>', table_res.text, re.DOTALL | re.IGNORECASE)
                     bulk_data = []
                     
                     for row in rows[:25]:
                         cols = re.findall(r'<td.*?>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
                         if len(cols) >= 2:
-                            # নাম্বার বের করা
-                            raw_phone_text = re.sub(r'<.*?>', ' ', cols[0]) # HTML ট্যাগ মুছে ফেলা
+                            raw_phone_text = re.sub(r'<.*?>', ' ', cols[0]) 
                             phone_match = re.search(r'(\d{10,15})', raw_phone_text)
                             if not phone_match: continue
                             phone = phone_match.group(1)
                             
-                            # স্ট্যাটাস ও OTP বের করা
                             status_text = re.sub(r'<.*?>', ' ', cols[1]).strip()
                             otp = "N/A"
                             otp_match = re.search(r'\b\d{4,6}\b', status_text)
@@ -92,12 +111,13 @@ def run_mk_bot():
                         requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
                         print(f"[*] Synced {len(bulk_data)} numbers with Admin Panel.")
                         
-                    time.sleep(3) # প্রতি ৩ সেকেন্ডে সাইট রিফ্রেশ করবে
+                    time.sleep(3) # ৩ সেকেন্ড পর পর রিফ্রেশ
                         
                 except Exception as inner_e:
                     print(f"[-] Inner Loop Error: {inner_e}")
                     time.sleep(5)
-                    if "session" in str(inner_e).lower(): break # সেশন আউট হলে আবার লগইন করবে
+                    if "session" in str(inner_e).lower() or "login" in str(inner_e).lower(): 
+                        break # সেশন আউট হলে আবার লগইন করবে
                     
         except Exception as e:
             print(f"❌ Critical Error: {e}")
@@ -105,7 +125,7 @@ def run_mk_bot():
 
 @app.route('/')
 def home():
-    return jsonify({"status": "Fast API Bot is Running 🚀", "mode": "Requests Module"})
+    return jsonify({"status": "Magic API Bot is Running 🚀"})
 
 if __name__ == '__main__':
     threading.Thread(target=run_mk_bot, daemon=True).start()
