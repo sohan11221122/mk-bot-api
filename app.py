@@ -53,14 +53,10 @@ def run_mk_bot():
                 time.sleep(10)
                 continue
 
-            print(f"Target Range: {target_range}")
-
-            # Enter Range
+            # Enter Range and click get number
             range_input = driver.find_element(By.XPATH, "//input[contains(@placeholder, 'XXXXX') or @type='text']")
             range_input.clear()
             range_input.send_keys(target_range)
-
-            # Click Get Number
             driver.find_element(By.XPATH, "//button[contains(text(), 'GET NUMBER')]").click()
             time.sleep(5) 
 
@@ -69,13 +65,22 @@ def run_mk_bot():
                 phone = driver.find_element(By.XPATH, "//table//tbody/tr[1]/td[1]//span[1]").text
                 status_text = driver.find_element(By.XPATH, "//table//tbody/tr[1]/td[2]").text 
                 
-                print(f"Got Number: {phone} | Status: {status_text}")
+                # আপনার ছবির লজিক অনুযায়ী OTP রিড করা
+                if "N/A" in status_text:
+                    status = "PENDING"
+                    otp = "Waiting..."
+                else:
+                    status = "SUCCESS"
+                    # শুধু OTP সংখ্যাটুকু আলাদা করা (যেমন: "29995")
+                    otp = status_text.split('\n')[0].strip()
+                
+                print(f"Got Number: {phone} | Status: {status} | OTP: {otp}")
 
                 # Send to your API
                 payload = {
                     "phone": phone,
-                    "status": "PENDING" if "SMS" in status_text else "SUCCESS",
-                    "otp": status_text
+                    "status": status,
+                    "otp": otp
                 }
                 requests.post(f"{API_BRIDGE_URL}?action=save_number", json=payload)
                 
