@@ -12,37 +12,41 @@ import re
 import os
 
 app = Flask(__name__)
+
+# আপনার API লিংক
 API_BRIDGE_URL = "http://sohan1020.onlinewebshop.net/api/api_bridge.php"
 
 def setup_browser():
     chrome_options = Options()
-    # Render-এর জন্য প্রয়োজনীয় সেটিংস
-    chrome_options.add_argument("--headless=new") # New headless mode
+    
+    # Render-এর জন্য জরুরি সেটিংস
+    chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
     
-    # Render সার্ভারে Chromium এর লোকেশন
-    chrome_options.binary_location = "/usr/bin/chromium" 
+    # Render-এ Chromium এর লোকেশন
+    chrome_options.binary_location = "/usr/bin/chromium"
     service = Service("/usr/bin/chromedriver")
     
     return webdriver.Chrome(service=service, options=chrome_options)
 
 def run_mk_bot():
-    print("🚀 Smart Cloud Bot Started for Render...")
+    print("🚀 MK Cloud Bot Started on Render...")
+    driver = None
     
-    while True: # Main Loop to restart driver if it crashes
-        driver = None
+    while True:
         try:
             driver = setup_browser()
             wait = WebDriverWait(driver, 15)
             
+            # --- LOGIN PROCESS ---
             print("[*] Logging in to MK Network...")
             driver.get("http://mknetworkbd.com/auth.php")
             time.sleep(4)
             
-            # Login Bypass (Fixed: Using Placeholder)
+            # JS Injection দিয়ে লগইন (Placeholder ব্যবহার করে)
             driver.execute_script("""
                 var e = document.querySelector("input[placeholder='Enter phone or email']");
                 if(e) e.value = 'sohan.shahel.sifa@gmail.com';
@@ -51,40 +55,35 @@ def run_mk_bot():
             """)
             time.sleep(1)
             
-            # Login Click (Fixed: Trying ID first)
+            # লগইন বাটনে ক্লিক
             try:
                 driver.execute_script("document.getElementById('t-btnlog').click();")
             except:
-                try:
-                    driver.find_element(By.XPATH, "//button[contains(text(), 'Login')]").click()
-                except:
-                    print("[-] Login button click failed, trying submit...")
-                    driver.execute_script("document.forms[0].submit();")
+                # যদি ID না থাকে
+                driver.find_element(By.XPATH, "//button[contains(text(), 'Login')]").click()
                 
             time.sleep(5)
             
+            # লগইন সফল হয়েছে কিনা চেক
             if "auth.php" in driver.current_url:
                 print("❌ Login Failed! Check credentials.")
                 driver.quit()
-                time.sleep(60)
+                time.sleep(30)
                 continue
                 
-            print("[+] Login Successful! Going to Get Number Page...")
-            
+            print("[+] Login Successful! Moving to Get Number Page...")
             driver.get("http://mknetworkbd.com/getnum.php")
             time.sleep(5)
 
-            # Inner Loop for polling
+            # --- MAIN LOOP ---
             while True:
                 try:
-                    # ১. সিগন্যাল চেক
+                    # ১. সিগন্যাল চেক (অ্যাডমিন প্যানেল থেকে)
                     try:
                         sig_res = requests.get(f"{API_BRIDGE_URL}?action=check_signal", timeout=10).json()
                         
                         if sig_res.get("signal") == "GET":
-                            print("\n=============================================")
-                            print("[*] 🔔 SIGNAL RECEIVED! Clicking GET NUMBER...")
-                            print("=============================================\n")
+                            print("\n🔔 SIGNAL RECEIVED! Clicking GET NUMBER...")
                             
                             # সিগন্যাল রিসেট
                             requests.get(f"{API_BRIDGE_URL}?action=signal_received", timeout=5)
@@ -94,16 +93,17 @@ def run_mk_bot():
                             if target_range:
                                 driver.execute_script(f"document.querySelector('input[placeholder*=\"XXXXX\"]').value='{target_range}';")
 
-                            # পুরনো রো সেভ
+                            # পুরনো ডাটা চেক (যাতে একই নাম্বার দুবার না নেয়)
                             old_rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
                             old_top_text = old_rows[0].text if old_rows else ""
 
-                            # GET NUMBER ক্লিক (Fixed: ID 'getBtn')
+                            # GET NUMBER বাটনে ক্লিক (ID দিয়ে)
                             try:
                                 driver.execute_script("document.getElementById('getBtn').click();")
                             except:
                                 driver.find_element(By.XPATH, "//button[contains(text(), 'GET NUMBER')]").click()
                             
+                            # টেবিল আপডেট হওয়ার জন্য অপেক্ষা
                             print("[*] Waiting for table to update...")
                             for _ in range(15):
                                 time.sleep(1)
@@ -116,19 +116,20 @@ def run_mk_bot():
                             if rows:
                                 cols = rows[0].find_elements(By.TAG_NAME, "td")
                                 if len(cols) >= 1: 
-                                    # নাম্বার প্রথম কলাম থেকে নেওয়া
                                     raw_text = cols[0].text
                                     phone = re.sub(r'[^0-9]', '', raw_text.split('\n')[0])
                                     
                                     if phone:
-                                        print(f"\n[+] 🎉 FRESH NUMBER EXTRACTED: {phone}")
+                                        print(f"✅ Fresh Number Saved: {phone}")
                                         payload = {"phone": phone, "status": "PENDING", "otp": "Waiting..."}
-                                        post_res = requests.post(f"{API_BRIDGE_URL}?action=save_number", json=payload, timeout=5)
-                                        print(f"[*] DB Response: {post_res.text}\n")
-                    except Exception as check_e:
-                        print(f"[-] Signal Check Error: {check_e}")
+                                        requests.post(f"{API_BRIDGE_URL}?action=save_number", json=payload, timeout=5)
+                        else:
+                            print("...Waiting for Signal...", end='\r')
 
-                    # ২. OTP আপডেট (Bulk Scan)
+                    except Exception as check_e:
+                        print(f"[-] Signal Error: {check_e}")
+
+                    # ২. OTP আপডেট (টেবিল স্ক্যান)
                     rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
                     if rows:
                         bulk_data = []
@@ -151,20 +152,18 @@ def run_mk_bot():
                                     bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
                         
                         if bulk_data:
-                            try:
-                                requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
-                            except: pass
+                            requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
 
                 except Exception as inner_e:
                     print(f"[-] Inner Loop Error: {inner_e}")
-                    # যদি সেশন এক্সপায়ার হয় তাহলে ব্রেক করে আউটার লুপে গিয়ে রিলগইন করবে
+                    # যদি ব্রাউজার ক্র্যাশ করে তাহলে রিস্টার্ট করবে
                     if "no such window" in str(inner_e).lower() or "session deleted" in str(inner_e).lower():
                         break
                 
                 time.sleep(3)
 
         except Exception as e:
-            print(f"❌ Critical Bot Error: {e}")
+            print(f"❌ Critical Error: {e}")
             if driver:
                 try: driver.quit()
                 except: pass
@@ -173,7 +172,7 @@ def run_mk_bot():
 
 @app.route('/')
 def home():
-    return jsonify({"status": "Cloud Bot is Running successfully on Render!"})
+    return jsonify({"status": "MK Cloud Bot is Running!"})
 
 if __name__ == '__main__':
     threading.Thread(target=run_mk_bot, daemon=True).start()
