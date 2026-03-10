@@ -1,126 +1,147 @@
-import logging
+from flask import Flask, jsonify
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import threading
 import time
 import requests
-import threading
 import re
 import os
-import random
-from flask import Flask, jsonify
-import cloudscraper
 
 app = Flask(__name__)
 API_BRIDGE_URL = "http://sohan1020.onlinewebshop.net/api/api_bridge.php"
+EMAIL = "sohan.shahel.sifa@gmail.com"
+PASSWORD = "Sohan123@@##"
+TARGET_RANGE = "237629XXXXXX"
 
-# 🟢 লাইভ স্ট্যাটাস এবং লগের জন্য ড্যাশবোর্ড
+# লাইভ ড্যাশবোর্ড
 bot_state = {
-    "status": "Running",
-    "is_logged_in": False,
-    "last_signal": "Unknown",
-    "last_sync": "Never",
+    "status": "Starting Server Browser...",
     "action_logs": []
 }
 
 def add_log(msg):
     print(msg, flush=True)
-    # ব্রাউজারে দেখার জন্য লগ সেভ করে রাখা হচ্ছে
     bot_state["action_logs"].insert(0, f"{time.strftime('%I:%M:%S %p')} - {msg}")
-    if len(bot_state["action_logs"]) > 10:
+    if len(bot_state["action_logs"]) > 15:
         bot_state["action_logs"].pop()
 
-scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-api_session = requests.Session()
-
-def login_to_mk():
-    try:
-        add_log("Fetching Login Page...")
-        res = scraper.get("http://mknetworkbd.com/auth.php", timeout=20)
-        
-        email_name, pass_name = "email", "password"
-        for inp in re.findall(r'<input([^>]+)>', res.text, re.IGNORECASE):
-            name_match = re.search(r'name=["\']([^"\']+)["\']', inp, re.IGNORECASE)
-            if name_match:
-                if 'password' in inp.lower(): pass_name = name_match.group(1)
-                elif 'email' in inp.lower() or 'user' in inp.lower(): email_name = name_match.group(1)
-        
-        payload = {email_name: "sohan.shahel.sifa@gmail.com", pass_name: "Sohan123@@##", "login": "1", "submit": "1", "t-btnlog": "1"}
-        login_res = scraper.post("http://mknetworkbd.com/auth.php", data=payload, timeout=20)
-        
-        if "dashboard" in login_res.text.lower() or "logout" in login_res.text.lower():
-            bot_state["is_logged_in"] = True
-            add_log("✅ Login Success!")
-        else:
-            add_log("❌ Login Failed!")
-    except Exception as e:
-        add_log(f"Login Error: {e}")
-
-def sync_data():
-    try:
-        current_time = int(time.time())
-        
-        sig_req = api_session.get(f"{API_BRIDGE_URL}?action=check_signal&_t={current_time}", headers={"User-Agent": "Render-Bot"}, timeout=15)
-        if sig_req.status_code == 200:
-            sig_res = sig_req.json()
-            bot_state["last_signal"] = sig_res.get("signal", "WAIT")
-            
-            if bot_state["last_signal"] == "GET":
-                add_log("🔔 SIGNAL 'GET' RECEIVED! Requesting number...")
-                api_session.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", timeout=10)
-                
-                range_req = api_session.get(f"{API_BRIDGE_URL}?action=get_range&_t={current_time}", timeout=10).json()
-                target_range = range_req.get('range', '')
-                
-                # 🟢 FIXED: Missing 'submit' parameter added back!
-                num_payload = {"service": "fb", "range": target_range, "getBtn": "1", "submit": "1"} 
-                time.sleep(random.uniform(1.0, 2.0))
-                scraper.post("http://mknetworkbd.com/getnum.php", data=num_payload, timeout=20)
-                add_log(f"📤 Requested new number from MK Network! (Range: {target_range})")
-
-        time.sleep(random.uniform(2.0, 3.0))
-        table_res = scraper.get("http://mknetworkbd.com/getnum.php", timeout=20)
-        
-        if "login" in table_res.url.lower():
-            bot_state["is_logged_in"] = False
-            add_log("⚠️ Session expired!")
-            return
-
-        rows = re.findall(r'<tr.*?>(.*?)</tr>', table_res.text, re.DOTALL | re.IGNORECASE)
-        bulk_data = []
-        
-        for row in rows[:25]:
-            cols = re.findall(r'<td.*?>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
-            if len(cols) >= 2:
-                raw_phone = re.sub(r'<.*?>', ' ', cols[0]) 
-                phone_match = re.search(r'(\d{10,15})', raw_phone)
-                if not phone_match: continue
-                phone = phone_match.group(1)
-                
-                status_text = re.sub(r'<.*?>', ' ', cols[1]).strip()
-                otp = "N/A"
-                otp_match = re.search(r'\b\d{4,6}\b', status_text)
-                if otp_match: otp = otp_match.group(0)
-                
-                net_status = "PENDING"
-                if "SUCCESS" in status_text.upper() or otp != "N/A": net_status = "SUCCESS"
-                elif "CANCELED" in status_text.upper() or "EXPIRED" in status_text.upper(): net_status = "FAILED"
-                
-                bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
-                
-        if bulk_data:
-            api_session.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=15)
-            bot_state["last_sync"] = f"Synced {len(bulk_data)} numbers"
-        
-    except Exception as e:
-        add_log(f"Sync Error: {e}")
+def create_driver():
+    # 🟢 সার্ভারের জন্য Headless (অদৃশ্য) মোড চালু করা
+    options = webdriver.ChromeOptions()
+    options.add_argument('--headless') # ব্যাকগ্রাউন্ডে চলবে
+    options.add_argument('--no-sandbox') # লিনাক্স সার্ভারের জন্য জরুরি
+    options.add_argument('--disable-dev-shm-usage') # মেমোরি ক্র্যাশ ঠেকানোর জন্য
+    options.add_argument('--window-size=1920,1080')
+    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    
+    return webdriver.Chrome(options=options)
 
 def background_loop():
-    add_log("🚀 Background Thread Started!")
-    while True:
-        if not bot_state["is_logged_in"]:
-            login_to_mk()
+    add_log("🚀 Background Browser Thread Started!")
+    
+    while True: # যদি ব্রাউজার ক্র্যাশ করে, তবে আবার নতুন করে শুরু হবে
+        driver = None
+        try:
+            add_log("[*] Initializing Chrome Browser...")
+            driver = create_driver()
+            wait = WebDriverWait(driver, 15)
+            
+            # --- 1. Login ---
+            add_log("[*] Logging into MK Network...")
+            driver.get("http://mknetworkbd.com/auth.php")
+            
+            email_field = wait.until(EC.presence_of_element_located((By.XPATH, "//input[contains(@placeholder, 'phone or email') or @type='text']")))
+            pass_field = driver.find_element(By.XPATH, "//input[contains(@placeholder, 'password') or @type='password']")
+            
+            email_field.clear()
+            email_field.send_keys(EMAIL)
+            pass_field.clear()
+            pass_field.send_keys(PASSWORD)
+            time.sleep(1)
+            
+            try:
+                login_btn = driver.find_element(By.XPATH, "/html/body/div[1]/div[4]/form/button")
+                driver.execute_script("arguments[0].click();", login_btn)
+            except:
+                pass_field.submit()
+            
             time.sleep(5)
-        else:
-            sync_data()
-            time.sleep(12) 
+            if "auth.php" in driver.current_url:
+                add_log("❌ Login failed. Retrying in 10s...")
+                driver.quit()
+                time.sleep(10)
+                continue
+                
+            add_log("✅ Login Success!")
+            
+            # --- 2. Setup Page & Range ---
+            driver.get("http://mknetworkbd.com/getnum.php")
+            time.sleep(3)
+            try:
+                range_input = driver.find_element(By.XPATH, "//input[@name='range' or @type='text']")
+                range_input.clear()
+                range_input.send_keys(TARGET_RANGE)
+                add_log(f"[*] Range set to: {TARGET_RANGE}")
+            except:
+                pass
+
+            # --- 3. Main Monitor Loop ---
+            while True:
+                current_time = int(time.time())
+                
+                # Signal Check from DB
+                sig_req = requests.get(f"{API_BRIDGE_URL}?action=check_signal&_t={current_time}", timeout=10)
+                if sig_req.status_code == 200 and sig_req.json().get("signal") == "GET":
+                    add_log("🔔 SIGNAL 'GET' RECEIVED!")
+                    requests.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", timeout=10)
+                    
+                    # Click Button
+                    add_log("[*] Requesting new numbers from site...")
+                    for i in range(2):
+                        try:
+                            btn = wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'get number')]")))
+                            driver.execute_script("arguments[0].click();", btn)
+                            time.sleep(4)
+                        except Exception as e:
+                            add_log(f"   -> Click error: {e}")
+                
+                # Read Table & OTPs
+                html = driver.page_source
+                rows = re.findall(r'<tr.*?>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
+                bulk_data = []
+
+                for row in rows[:8]:
+                    cols = re.findall(r'<td.*?>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
+                    if len(cols) >= 2:
+                        raw_phone = re.sub(r'<.*?>', ' ', cols[0])
+                        phone_match = re.search(r'(\d{10,15})', raw_phone)
+                        if not phone_match: continue
+                        phone = phone_match.group(1)
+
+                        status_text = re.sub(r'<.*?>', ' ', cols[1]).strip()
+                        otp = "N/A"
+                        otp_match = re.search(r'\b\d{4,6}\b', status_text)
+                        if otp_match: otp = otp_match.group(0)
+
+                        net_status = "PENDING"
+                        if "SUCCESS" in status_text.upper() or otp != "N/A": net_status = "SUCCESS"
+                        elif "CANCELED" in status_text.upper() or "EXPIRED" in status_text.upper(): net_status = "FAILED"
+
+                        bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
+
+                if bulk_data:
+                    requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
+                    bot_state["status"] = f"Synced {len(bulk_data)} numbers"
+                
+                time.sleep(12) # লুপের গ্যাপ
+                
+        except Exception as e:
+            add_log(f"⚠️ Critical Error: {e}")
+            if driver:
+                driver.quit()
+            time.sleep(10) # ক্র্যাশ করলে ১০ সেকেন্ড পর ব্রাউজার রিস্টার্ট হবে
 
 bot_thread = threading.Thread(target=background_loop, daemon=True)
 bot_thread.start()
