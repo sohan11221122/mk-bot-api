@@ -6,36 +6,33 @@ import re
 import os
 import random
 from flask import Flask, jsonify
-import cloudscraper # 🟢 Cloudflare Bypass Library
-
-# 🟢 Render-এ গ্যারান্টিড লগ দেখানোর জন্য প্রফেশনাল লগার
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler()])
-logger = logging.getLogger()
+import cloudscraper
 
 app = Flask(__name__)
 API_BRIDGE_URL = "http://sohan1020.onlinewebshop.net/api/api_bridge.php"
 
+# 🟢 লাইভ স্ট্যাটাস এবং লগের জন্য ড্যাশবোর্ড
 bot_state = {
-    "1_status": "Starting Stealth Mode Server...",
-    "2_mk_login": False,
-    "3_last_signal_from_pc": "Unknown",
-    "4_last_sync_time": "Never",
-    "5_latest_error": "None"
+    "status": "Running",
+    "is_logged_in": False,
+    "last_signal": "Unknown",
+    "last_sync": "Never",
+    "action_logs": []
 }
 
-# 🟢 Cloudscraper Session (Cloudflare কে বোকা বানানোর জন্য)
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'mobile': False
-    }
-)
+def add_log(msg):
+    print(msg, flush=True)
+    # ব্রাউজারে দেখার জন্য লগ সেভ করে রাখা হচ্ছে
+    bot_state["action_logs"].insert(0, f"{time.strftime('%I:%M:%S %p')} - {msg}")
+    if len(bot_state["action_logs"]) > 10:
+        bot_state["action_logs"].pop()
+
+scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
 api_session = requests.Session()
 
 def login_to_mk():
     try:
-        logger.info("Fetching MK Login Page (Stealth Mode)...")
+        add_log("Fetching Login Page...")
         res = scraper.get("http://mknetworkbd.com/auth.php", timeout=20)
         
         email_name, pass_name = "email", "password"
@@ -49,67 +46,42 @@ def login_to_mk():
         login_res = scraper.post("http://mknetworkbd.com/auth.php", data=payload, timeout=20)
         
         if "dashboard" in login_res.text.lower() or "logout" in login_res.text.lower():
-            bot_state["2_mk_login"] = True
-            bot_state["1_status"] = "Logged In (Stealth)"
-            logger.info("✅ Login Success!")
-            return True
+            bot_state["is_logged_in"] = True
+            add_log("✅ Login Success!")
         else:
-            bot_state["1_status"] = "Login Failed!"
-            logger.warning("❌ Login Failed! Retrying...")
-            return False
+            add_log("❌ Login Failed!")
     except Exception as e:
-        bot_state["5_latest_error"] = f"Login Error: {e}"
-        logger.error(bot_state["5_latest_error"])
-        return False
+        add_log(f"Login Error: {e}")
 
 def sync_data():
     try:
         current_time = int(time.time())
         
-        # 🟢 Signal Check from PC
-        sig_url = f"{API_BRIDGE_URL}?action=check_signal&_t={current_time}"
-        sig_req = api_session.get(sig_url, headers={"User-Agent": "Render-Bot-Server"}, timeout=15)
-        
-        if sig_req.status_code != 200:
-            bot_state["5_latest_error"] = f"AwardSpace Error! Code: {sig_req.status_code}"
-            return False
-            
-        try:
+        sig_req = api_session.get(f"{API_BRIDGE_URL}?action=check_signal&_t={current_time}", headers={"User-Agent": "Render-Bot"}, timeout=15)
+        if sig_req.status_code == 200:
             sig_res = sig_req.json()
-        except:
-            return False
+            bot_state["last_signal"] = sig_res.get("signal", "WAIT")
             
-        bot_state["3_last_signal_from_pc"] = sig_res.get("signal", "WAIT")
-        
-        if bot_state["3_last_signal_from_pc"] == "GET":
-            logger.info("🔔 SIGNAL RECEIVED! Fetching new number from MK...")
-            api_session.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", timeout=10)
-            
-            try:
+            if bot_state["last_signal"] == "GET":
+                add_log("🔔 SIGNAL 'GET' RECEIVED! Requesting number...")
+                api_session.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", timeout=10)
+                
                 range_req = api_session.get(f"{API_BRIDGE_URL}?action=get_range&_t={current_time}", timeout=10).json()
                 target_range = range_req.get('range', '')
                 
-                num_payload = {"service": "fb", "range": target_range, "getBtn": "1"} 
-                
-                # 🟢 Random Delay (মানুষের মতো ক্লিক করার জন্য)
-                time.sleep(random.uniform(1.5, 3.5))
-                fetch_res = scraper.post("http://mknetworkbd.com/getnum.php", data=num_payload, timeout=20)
-                
-                if "login" in fetch_res.url.lower():
-                    logger.warning("⚠️ Session expired during fetch. Relogging...")
-                    bot_state["2_mk_login"] = False
-                    return False
-            except Exception as fe:
-                logger.error(f"Fetch Error: {fe}")
+                # 🟢 FIXED: Missing 'submit' parameter added back!
+                num_payload = {"service": "fb", "range": target_range, "getBtn": "1", "submit": "1"} 
+                time.sleep(random.uniform(1.0, 2.0))
+                scraper.post("http://mknetworkbd.com/getnum.php", data=num_payload, timeout=20)
+                add_log(f"📤 Requested new number from MK Network! (Range: {target_range})")
 
-        # 🟢 Read Numbers & OTPs
-        time.sleep(random.uniform(2.0, 4.0)) # 🟢 Random Delay
+        time.sleep(random.uniform(2.0, 3.0))
         table_res = scraper.get("http://mknetworkbd.com/getnum.php", timeout=20)
         
         if "login" in table_res.url.lower():
-            logger.warning("⚠️ Session expired during table read. Relogging...")
-            bot_state["2_mk_login"] = False
-            return False
+            bot_state["is_logged_in"] = False
+            add_log("⚠️ Session expired!")
+            return
 
         rows = re.findall(r'<tr.*?>(.*?)</tr>', table_res.text, re.DOTALL | re.IGNORECASE)
         bulk_data = []
@@ -135,25 +107,20 @@ def sync_data():
                 
         if bulk_data:
             api_session.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=15)
-            bot_state["4_last_sync_time"] = f"Synced {len(bulk_data)} numbers at {time.strftime('%H:%M:%S')}"
-            logger.info(bot_state["4_last_sync_time"])
+            bot_state["last_sync"] = f"Synced {len(bulk_data)} numbers"
         
-        return True
     except Exception as e:
-        bot_state["5_latest_error"] = f"Sync Error: {e}"
-        logger.error(bot_state["5_latest_error"])
-        return False
+        add_log(f"Sync Error: {e}")
 
 def background_loop():
-    logger.info("Background Thread Started (Stealth Mode)!")
+    add_log("🚀 Background Thread Started!")
     while True:
-        if not bot_state["2_mk_login"]:
+        if not bot_state["is_logged_in"]:
             login_to_mk()
-            time.sleep(10)
+            time.sleep(5)
         else:
             sync_data()
-            # 🟢 15 সেকেন্ডের স্লিপ (AwardSpace এবং MK Network এর লিমিট থেকে বাঁচতে)
-            time.sleep(15) 
+            time.sleep(12) 
 
 bot_thread = threading.Thread(target=background_loop, daemon=True)
 bot_thread.start()
