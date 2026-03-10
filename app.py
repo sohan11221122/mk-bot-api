@@ -11,10 +11,8 @@ API_BRIDGE_URL = "http://sohan1020.onlinewebshop.net/api/api_bridge.php"
 def run_mk_bot():
     print("🚀 Super-Fast Magic API Bot Started...")
     
-    # সেশন তৈরি করা (যাতে কুকিজ সেভ থাকে)
     session = requests.Session()
     
-    # রিয়েল ব্রাউজারের মতো হেডার
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -23,13 +21,10 @@ def run_mk_bot():
     
     while True:
         try:
-            print("[*] Fetching Login Page to extract session & input names...")
-            
-            # 🟢 ১. লগইনের আগে পেজ ভিজিট করা
+            print("[*] Fetching Login Page to extract session...")
             res = session.get("http://mknetworkbd.com/auth.php", headers=headers, timeout=15)
             html = res.text
             
-            # 🟢 ২. Auto-Detect Logic (ইনপুটের নাম নিজে নিজে খুঁজে বের করবে)
             inputs = re.findall(r'<input([^>]+)>', html, re.IGNORECASE)
             email_name = "email"
             pass_name = "password"
@@ -46,7 +41,6 @@ def run_mk_bot():
                             
             print(f"[*] Auto-Detected Fields -> Email: '{email_name}', Password: '{pass_name}'")
             
-            # 🟢 ৩. ডাইনামিক পেলোড তৈরি ও লগইন রিকোয়েস্ট
             login_payload = {
                 email_name: "sohan.shahel.sifa@gmail.com",
                 pass_name: "Sohan123@@##",
@@ -58,7 +52,6 @@ def run_mk_bot():
             print("[*] Sending Login Request...")
             login_res = session.post("http://mknetworkbd.com/auth.php", data=login_payload, headers=headers, timeout=15)
             
-            # লগইন সফল হয়েছে কিনা চেক করা
             if "dashboard" not in login_res.text.lower() and "logout" not in login_res.text.lower():
                 print("❌ Login Failed! Retrying in 30s...")
                 time.sleep(30)
@@ -66,17 +59,25 @@ def run_mk_bot():
                 
             print("[+] Login OK! Session Secured. Polling for numbers...")
             
-            # 🟢 ৪. মেইন লুপ (নাম্বার ও ওটিপি আনা)
+            loop_count = 0
             while True:
                 try:
-                    # Signal Check
-                    sig_res = requests.get(f"{API_BRIDGE_URL}?action=check_signal", timeout=10).json()
+                    loop_count += 1
+                    current_time = int(time.time()) # 🟢 Anti-Cache Timestamp
+                    
+                    # Signal Check with Anti-Cache
+                    sig_req_url = f"{API_BRIDGE_URL}?action=check_signal&_t={current_time}"
+                    sig_res = session.get(sig_req_url, headers=headers, timeout=10).json()
+                    
+                    # 🟢 প্রতি ১৫ সেকেন্ডে একটি স্ট্যাটাস প্রিন্ট করবে (বোঝার জন্য যে বট কাজ করছে)
+                    if loop_count % 5 == 0:
+                        print(f"[*] Heartbeat: Checking DB Signal... (Current Status: {sig_res.get('signal')})")
                     
                     if sig_res.get("signal") == "GET":
                         print("\n🔔 SIGNAL RECEIVED: Desk Bot wants a number!")
-                        requests.get(f"{API_BRIDGE_URL}?action=signal_received", timeout=5)
+                        session.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", headers=headers, timeout=5)
                         
-                        target_range = requests.get(f"{API_BRIDGE_URL}?action=get_range", timeout=5).json().get('range', '')
+                        target_range = session.get(f"{API_BRIDGE_URL}?action=get_range&_t={current_time}", headers=headers, timeout=5).json().get('range', '')
                         
                         print(f"[*] Requesting new number...")
                         num_payload = {"service": "fb", "range": target_range, "getBtn": "1", "submit": "1"} 
@@ -108,8 +109,7 @@ def run_mk_bot():
                             bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
                             
                     if bulk_data:
-                        requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
-                        print(f"[*] Synced {len(bulk_data)} numbers with Admin Panel.")
+                        session.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
                         
                     time.sleep(3) # ৩ সেকেন্ড পর পর রিফ্রেশ
                         
