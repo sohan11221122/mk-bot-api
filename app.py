@@ -4,85 +4,88 @@ import requests
 import threading
 import re
 import os
+import sys
+
+# 🟢 Force Python to show logs immediately on Render
+os.environ['PYTHONUNBUFFERED'] = '1'
+sys.stdout.reconfigure(line_buffering=True)
 
 app = Flask(__name__)
 API_BRIDGE_URL = "http://sohan1020.onlinewebshop.net/api/api_bridge.php"
 
 def run_mk_bot():
-    print("🚀 Super-Fast Magic API Bot Started...", flush=True)
+    print("🚀 [START] Super-Fast Magic API Bot Initialized!", flush=True)
     
-    session = requests.Session()
+    # 🟢 দুটি আলাদা সেশন (যাতে MK Network আর AwardSpace এর কুকিজ মিক্স না হয়)
+    session = requests.Session() 
+    api_session = requests.Session() 
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Content-Type": "application/x-www-form-urlencoded"
     }
     
     while True:
         try:
-            print("[*] Fetching Login Page to extract session...", flush=True)
+            print("⏳ [1] Fetching MK Network Login Page...", flush=True)
             res = session.get("http://mknetworkbd.com/auth.php", headers=headers, timeout=15)
-            html = res.text
             
-            inputs = re.findall(r'<input([^>]+)>', html, re.IGNORECASE)
-            email_name = "email"
-            pass_name = "password"
-            
+            email_name, pass_name = "email", "password"
+            inputs = re.findall(r'<input([^>]+)>', res.text, re.IGNORECASE)
             for inp in inputs:
-                inp_lower = inp.lower()
                 name_match = re.search(r'name=["\']([^"\']+)["\']', inp, re.IGNORECASE)
                 if name_match:
-                    if 'type="password"' in inp_lower or "type='password'" in inp_lower:
-                        pass_name = name_match.group(1)
-                    elif 'type="text"' in inp_lower or 'type="email"' in inp_lower:
-                        if 'email' in inp_lower or 'user' in inp_lower or 'phone' in inp_lower:
-                            email_name = name_match.group(1)
+                    inp_lower = inp.lower()
+                    if 'password' in inp_lower: pass_name = name_match.group(1)
+                    elif 'email' in inp_lower or 'user' in inp_lower: email_name = name_match.group(1)
                             
-            print(f"[*] Auto-Detected Fields -> Email: '{email_name}', Password: '{pass_name}'", flush=True)
+            print(f"🔑 [2] Extracted Fields -> {email_name}, {pass_name}. Sending Login POST...", flush=True)
             
             login_payload = {
                 email_name: "sohan.shahel.sifa@gmail.com",
                 pass_name: "Sohan123@@##",
-                "login": "1",
-                "submit": "1",
-                "t-btnlog": "1"
+                "login": "1", "submit": "1", "t-btnlog": "1"
             }
             
-            print("[*] Sending Login Request...", flush=True)
             login_res = session.post("http://mknetworkbd.com/auth.php", data=login_payload, headers=headers, timeout=15)
             
             if "dashboard" not in login_res.text.lower() and "logout" not in login_res.text.lower():
-                print("❌ Login Failed! Retrying in 30s...", flush=True)
-                time.sleep(30)
+                print("❌ [ERROR] Login Failed! Retrying in 10s...", flush=True)
+                time.sleep(10)
                 continue
                 
-            print("[+] Login OK! Session Secured. Polling for numbers...", flush=True)
+            print("✅ [3] Login Success! Entering Main Loop...", flush=True)
             
-            loop_count = 0
             while True:
                 try:
-                    loop_count += 1
                     current_time = int(time.time())
+                    print(f"🔄 [LOOP] Checking DB Signal at {current_time}...", flush=True)
                     
-                    # Signal Check with Anti-Cache
-                    sig_req_url = f"{API_BRIDGE_URL}?action=check_signal&_t={current_time}"
-                    sig_res = session.get(sig_req_url, headers=headers, timeout=10).json()
+                    # 🟢 Signal Check from AwardSpace
+                    sig_url = f"{API_BRIDGE_URL}?action=check_signal&_t={current_time}"
+                    sig_req = api_session.get(sig_url, headers={"User-Agent": "RenderCloud/2.0"}, timeout=10)
                     
-                    if loop_count % 5 == 0:
-                        print(f"[*] Heartbeat: Checking DB Signal... (Current Status: {sig_res.get('signal')})", flush=True)
+                    if sig_req.status_code != 200:
+                        print(f"⚠️ [API ERROR] AwardSpace blocked request. HTTP Code: {sig_req.status_code}", flush=True)
+                        time.sleep(5)
+                        continue
+                        
+                    sig_res = sig_req.json()
+                    print(f"📡 Signal Status: {sig_res.get('signal')}", flush=True)
                     
                     if sig_res.get("signal") == "GET":
-                        print("\n🔔 SIGNAL RECEIVED: Desk Bot wants a number!", flush=True)
-                        session.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", headers=headers, timeout=5)
+                        print("🔔 [ACTION] SIGNAL RECEIVED! Fetching new number...", flush=True)
                         
-                        target_range = session.get(f"{API_BRIDGE_URL}?action=get_range&_t={current_time}", headers=headers, timeout=5).json().get('range', '')
+                        api_session.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", timeout=5)
+                        range_req = api_session.get(f"{API_BRIDGE_URL}?action=get_range&_t={current_time}", timeout=5).json()
+                        target_range = range_req.get('range', '')
                         
-                        print(f"[*] Requesting new number...", flush=True)
                         num_payload = {"service": "fb", "range": target_range, "getBtn": "1", "submit": "1"} 
                         session.post("http://mknetworkbd.com/getnum.php", data=num_payload, headers=headers, timeout=10)
+                        print("✅ [MK] Number requested from MK Network.", flush=True)
 
-                    # Bulk OTP Update
+                    print("🔍 [MK] Reading Table for Live Numbers/OTPs...", flush=True)
                     table_res = session.get("http://mknetworkbd.com/getnum.php", headers=headers, timeout=10)
                     
                     rows = re.findall(r'<tr.*?>(.*?)</tr>', table_res.text, re.DOTALL | re.IGNORECASE)
@@ -91,8 +94,8 @@ def run_mk_bot():
                     for row in rows[:25]:
                         cols = re.findall(r'<td.*?>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
                         if len(cols) >= 2:
-                            raw_phone_text = re.sub(r'<.*?>', ' ', cols[0]) 
-                            phone_match = re.search(r'(\d{10,15})', raw_phone_text)
+                            raw_phone = re.sub(r'<.*?>', ' ', cols[0]) 
+                            phone_match = re.search(r'(\d{10,15})', raw_phone)
                             if not phone_match: continue
                             phone = phone_match.group(1)
                             
@@ -108,21 +111,23 @@ def run_mk_bot():
                             bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
                             
                     if bulk_data:
-                        session.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
+                        print(f"📤 [DB] Syncing {len(bulk_data)} numbers to AwardSpace...", flush=True)
+                        api_session.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
                         
+                    print("💤 [SLEEP] Waiting 3 seconds...\n", flush=True)
                     time.sleep(3)
                         
                 except Exception as inner_e:
-                    print(f"[-] Inner Loop Error: {inner_e}", flush=True)
+                    print(f"⚠️ [LOOP ERROR] Something went wrong: {inner_e}", flush=True)
                     time.sleep(5)
-                    if "session" in str(inner_e).lower() or "login" in str(inner_e).lower(): 
-                        break
+                    if "json" in str(inner_e).lower() or "decode" in str(inner_e).lower():
+                        print("🚨 AwardSpace API returned HTML instead of JSON. IP might be blocked!", flush=True)
                     
         except Exception as e:
-            print(f"❌ Critical Error: {e}", flush=True)
+            print(f"❌ [CRITICAL ERROR] Bot crashed: {e}", flush=True)
             time.sleep(10)
 
-# 🟢 MAGIC FIX: Start the thread globally, outside of __main__ block so Render cannot ignore it!
+# 🟢 Start thread outside main block
 bot_thread = threading.Thread(target=run_mk_bot, daemon=True)
 bot_thread.start()
 
