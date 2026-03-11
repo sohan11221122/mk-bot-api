@@ -3,7 +3,6 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
 import threading
 import time
 import requests
@@ -22,14 +21,17 @@ bot_state = {
     "status": "Initializing System...",
     "action_logs": [],
     "last_synced_phone": "",
-    "debug_info": {}  # 🆕 ডিবাগ ইনফো
+    "current_signal": "UNKNOWN",
+    "total_synced": 0,
+    "error_count": 0
 }
 
 def add_log(msg, level="INFO"):
     timestamp = time.strftime('%I:%M:%S %p')
-    print(f"[{level}] {msg}", flush=True)
+    log_entry = f"{timestamp} [{level}] {msg}"
+    print(log_entry, flush=True)
     bot_state["action_logs"].insert(0, f"{timestamp} - {msg}")
-    if len(bot_state["action_logs"]) > 20:
+    if len(bot_state["action_logs"]) > 25:
         bot_state["action_logs"].pop()
 
 def create_driver():
@@ -39,344 +41,368 @@ def create_driver():
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--window-size=1920,1080')
     options.add_argument('--disable-gpu')
-    options.add_argument('--disable-software-rasterizer')
     options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    
-    # 🆕 এরর লগ এনাবল করা
     options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    
     return webdriver.Chrome(options=options)
 
-def check_api_connection():
-    """🆕 API Bridge কানেকশন চেক"""
+def send_to_database(phone, otp, status):
+    """📤 ডাটাবেসে নম্বর পাঠানো"""
     try:
-        response = requests.get(f"{API_BRIDGE_URL}?action=test", timeout=10)
-        add_log(f"✅ API Bridge Response: {response.status_code}")
-        return True
+        payload = {
+            "numbers": [{
+                "phone": phone,
+                "otp": otp,
+                "status": status
+            }]
+        }
+        
+        add_log(f"📤 Sending to DB: phone={phone}, otp={otp}, status={status}")
+        
+        response = requests.post(
+            f"{API_BRIDGE_URL}?action=save_bulk_numbers",
+            json=payload,
+            timeout=15
+        )
+        
+        add_log(f"📥 DB Response: HTTP {response.status_code} - {response.text[:150]}")
+        
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                if data.get("status") == "success":
+                    return True
+                else:
+                    add_log(f"❌ DB returned error: {data}", "ERROR")
+                    return False
+            except:
+                return True  # Assume success if can't parse JSON
+        else:
+            add_log(f"❌ HTTP Error: {response.status_code}", "ERROR")
+            return False
+            
     except Exception as e:
-        add_log(f"❌ API Bridge Connection Failed: {e}", "ERROR")
+        add_log(f"❌ DB Connection Error: {e}", "ERROR")
         return False
 
-def try_multiple_xpaths(driver, xpaths, description="element"):
-    """🆕 একাধিক XPath ট্রাই করা"""
-    for xpath in xpaths:
-        try:
-            element = driver.find_element(By.XPATH, xpath)
-            add_log(f"✅ Found {description} with XPath: {xpath[:50]}...")
-            return element
-        except:
+def parse_table_rows(html, target_prefix=""):
+    """📊 টেবিল থেকে নম্বর বের করা"""
+    results = []
+    
+    # প্রথমে সব <tr> খুঁজে বের করি
+    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
+    add_log(f"📊 Found {len(rows)} table rows in HTML")
+    
+    for idx, row in enumerate(rows):
+        # প্রতিটি row থেকে <td> বের করি
+        cols = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
+        
+        if len(cols) < 1:
             continue
-    add_log(f"❌ Could not find {description}", "WARN")
-    return None
+        
+        # 🎯 নম্বর বের করার একাধিক পদ্ধতি
+        phone = None
+        
+        # পদ্ধতি ১: প্রথম td থেকে
+        col0_text = re.sub(r'<[^>]+>', '', cols[0]).strip()
+        
+        # বিভিন্ন pattern দিয়ে নম্বর খোঁজা
+        patterns = [
+            r'(880\d{10})',      # 880 দিয়ে শুরু
+            r'(\d{13})',         # 13 digit
+            r'(\d{11,15})',      # 11-15 digit
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, col0_text)
+            if match:
+                phone = match.group(1)
+                break
+        
+        # পদ্ধতি ২: পুরো td HTML থেকে
+        if not phone:
+            for pattern in patterns:
+                match = re.search(pattern, cols[0])
+                if match:
+                    phone = match.group(1)
+                    break
+        
+        if not phone:
+            continue
+            
+        # 🎯 Prefix check (যদি দেওয়া থাকে)
+        if target_prefix:
+            clean_prefix = target_prefix.replace("X", "").replace("x", "")
+            if clean_prefix and not phone.startswith(clean_prefix):
+                add_log(f"   ⏭️ Skipped {phone} (prefix mismatch, need {clean_prefix})")
+                continue
+        
+        # 🎯 OTP এবং Status বের করা
+        otp = "N/A"
+        status = "PENDING"
+        
+        if len(cols) > 1:
+            col1_text = re.sub(r'<[^>]+>', '', cols[1]).strip()
+            
+            # OTP খোঁজা
+            otp_match = re.search(r'\b(\d{4,6})\b', col1_text)
+            if otp_match:
+                otp = otp_match.group(1)
+            
+            # Status চেক
+            col1_upper = col1_text.upper()
+            if "SUCCESS" in col1_upper or otp != "N/A":
+                status = "SUCCESS"
+            elif any(x in col1_upper for x in ["CANCEL", "EXPIRED", "FAILED", "TIMEOUT"]):
+                status = "FAILED"
+        
+        results.append({
+            "phone": phone,
+            "otp": otp,
+            "status": status,
+            "row_index": idx
+        })
+        
+        add_log(f"✅ Parsed: {phone} | OTP: {otp} | Status: {status}")
+    
+    return results
 
 def background_loop():
-    add_log("🚀 Background System Started (Debug Version)!")
+    add_log("🚀 MK Network Bot Started!")
+    add_log(f"🔗 API Bridge: {API_BRIDGE_URL}")
     
-    # 🆕 শুরুতে API চেক
-    check_api_connection()
+    # শুরুতে API চেক
+    try:
+        r = requests.get(f"{API_BRIDGE_URL}?action=check_signal", timeout=10)
+        add_log(f"✅ API Bridge connected: {r.text[:100]}")
+    except Exception as e:
+        add_log(f"❌ API Bridge failed: {e}", "ERROR")
     
     while True:
         driver = None
         try:
-            add_log("[*] Opening Virtual Browser...")
+            add_log("=" * 50)
+            add_log("🌐 Opening browser...")
             driver = create_driver()
             wait = WebDriverWait(driver, 20)
             
-            # --- ১. লগইন প্রসেস ---
-            add_log("[*] Logging into MK Network...")
+            # ===== লগইন =====
+            add_log("🔐 Logging into MK Network...")
             driver.get("http://mknetworkbd.com/auth.php")
             time.sleep(3)
             
-            # 🆕 একাধিক XPath দিয়ে ইমেইল ফিল্ড খোঁজা
-            email_xpaths = [
-                "//input[contains(@placeholder, 'phone') or contains(@placeholder, 'email')]",
-                "//input[@type='text']",
-                "//input[@name='email']",
-                "//input[@name='phone']",
-                "//input[contains(@class, 'form-control')][1]"
-            ]
+            # Email field
+            email_found = False
+            for xpath in ["//input[@type='text']", "//input[contains(@placeholder,'email')]", "//input[contains(@placeholder,'phone')]", "//input[@name='email']", "//input[@name='phone']"]:
+                try:
+                    elem = driver.find_element(By.XPATH, xpath)
+                    elem.clear()
+                    elem.send_keys(EMAIL)
+                    email_found = True
+                    add_log(f"✅ Email entered via: {xpath}")
+                    break
+                except:
+                    continue
             
-            email_field = try_multiple_xpaths(driver, email_xpaths, "email field")
-            if not email_field:
-                add_log("❌ Email field not found! Checking page source...", "ERROR")
-                bot_state["debug_info"]["page_source_snippet"] = driver.page_source[:1000]
+            if not email_found:
+                add_log("❌ Email field not found!", "ERROR")
+                bot_state["error_count"] += 1
                 driver.quit()
                 time.sleep(10)
                 continue
             
-            # 🆕 একাধিক XPath দিয়ে পাসওয়ার্ড ফিল্ড খোঁজা
-            pass_xpaths = [
-                "//input[@type='password']",
-                "//input[contains(@placeholder, 'password')]",
-                "//input[@name='password']",
-                "//input[contains(@class, 'password')]"
-            ]
+            # Password field
+            pass_found = False
+            for xpath in ["//input[@type='password']", "//input[contains(@placeholder,'password')]", "//input[@name='password']"]:
+                try:
+                    elem = driver.find_element(By.XPATH, xpath)
+                    elem.clear()
+                    elem.send_keys(PASSWORD)
+                    pass_found = True
+                    add_log(f"✅ Password entered")
+                    break
+                except:
+                    continue
             
-            pass_field = try_multiple_xpaths(driver, pass_xpaths, "password field")
-            if not pass_field:
+            if not pass_found:
                 add_log("❌ Password field not found!", "ERROR")
                 driver.quit()
                 time.sleep(10)
                 continue
             
-            email_field.clear()
-            email_field.send_keys(EMAIL)
-            pass_field.clear()
-            pass_field.send_keys(PASSWORD)
-            add_log(f"[*] Entered credentials: {EMAIL[:10]}...")
-            time.sleep(2)
+            time.sleep(1)
             
-            # 🆕 একাধিক XPath দিয়ে লগইন বাটন খোঁজা
-            login_xpaths = [
-                "//button[@type='submit']",
-                "//button[contains(text(), 'Login') or contains(text(), 'login')]",
-                "//input[@type='submit']",
-                "//button[contains(@class, 'btn-primary')]",
-                "//form//button",
-                "/html/body/div[1]/div[4]/form/button"
-            ]
-            
-            login_btn = try_multiple_xpaths(driver, login_xpaths, "login button")
-            if login_btn:
-                driver.execute_script("arguments[0].click();", login_btn)
-                add_log("[*] Clicked login button")
-            else:
-                add_log("[*] Trying to submit form via password field")
-                pass_field.submit()
+            # Login button
+            for xpath in ["//button[@type='submit']", "//button[contains(text(),'Login')]", "//form//button", "//input[@type='submit']"]:
+                try:
+                    btn = driver.find_element(By.XPATH, xpath)
+                    driver.execute_script("arguments[0].click();", btn)
+                    add_log("✅ Login button clicked")
+                    break
+                except:
+                    continue
             
             time.sleep(5)
             
+            # Login check
             if "auth.php" in driver.current_url:
-                add_log("❌ Login failed! Still on auth page", "ERROR")
-                # 🆕 স্ক্রিনশট সেভ (ডিবাগের জন্য)
-                try:
-                    driver.save_screenshot("/tmp/login_failed.png")
-                    add_log("📸 Screenshot saved: /tmp/login_failed.png")
-                except:
-                    pass
+                add_log("❌ Login failed - still on auth page", "ERROR")
                 driver.quit()
-                time.sleep(10)
+                time.sleep(15)
                 continue
-                
-            add_log("✅ Login Success!")
+            
+            add_log("✅ Login successful!")
+            
+            # Get Number page এ যাওয়া
             driver.get("http://mknetworkbd.com/getnum.php")
             time.sleep(4)
-
-            # --- ২. Main Monitor Loop ---
+            
+            # ===== Main Loop =====
             while True:
                 current_time = int(time.time())
                 
-                # 🛡️ Auto-Login Check
+                # Session check
                 if "auth.php" in driver.current_url:
-                    add_log("⚠️ Session Expired! Triggering Auto Re-Login...")
-                    break 
+                    add_log("⚠️ Session expired - re-login needed")
+                    break
                 
-                # 🔔 Signal Check
+                # 🔔 Signal check
                 try:
-                    sig_req = requests.get(f"{API_BRIDGE_URL}?action=check_signal&_t={current_time}", timeout=10)
-                    sig_data = sig_req.json() if sig_req.status_code == 200 else {}
+                    sig_response = requests.get(
+                        f"{API_BRIDGE_URL}?action=check_signal&_t={current_time}",
+                        timeout=10
+                    )
+                    sig_data = sig_response.json()
+                    signal = sig_data.get("signal", "WAIT")
+                    bot_state["current_signal"] = signal
                 except Exception as e:
-                    add_log(f"⚠️ Signal check failed: {e}", "WARN")
-                    sig_data = {}
+                    add_log(f"⚠️ Signal check error: {e}", "WARN")
+                    signal = "WAIT"
                 
-                signal = sig_data.get("signal", "")
+                # Range check
+                live_range = ""
+                try:
+                    range_response = requests.get(
+                        f"{API_BRIDGE_URL}?action=get_range&_t={current_time}",
+                        timeout=10
+                    )
+                    range_data = range_response.json()
+                    live_range = range_data.get("range", "")
+                except:
+                    pass
                 
+                # 🎯 GET signal পেলে নম্বর রিকোয়েস্ট করবে
                 if signal == "GET":
-                    add_log("🔔 SIGNAL 'GET' RECEIVED!")
+                    add_log(f"🔔 SIGNAL=GET received! Range: {live_range}")
                     
-                    # সিগন্যাল রিসিভড কনফার্মেশন
+                    # Range input
+                    if live_range:
+                        for xpath in ["//input[@name='range']", "//input[@type='text']", "//form//input[1]"]:
+                            try:
+                                inp = driver.find_element(By.XPATH, xpath)
+                                inp.clear()
+                                inp.send_keys(live_range)
+                                add_log(f"✅ Range set: {live_range}")
+                                break
+                            except:
+                                continue
+                        time.sleep(1)
+                    
+                    # Get Number button click
+                    add_log("🖱️ Clicking Get Number button...")
+                    btn_clicked = False
+                    for xpath in [
+                        "//button[contains(text(),'Get Number')]",
+                        "//button[contains(text(),'GET NUMBER')]",
+                        "//button[contains(text(),'Get')]",
+                        "//button[contains(@class,'btn')]",
+                        "//a[contains(text(),'Get')]",
+                        "//input[@value='Get Number']"
+                    ]:
+                        try:
+                            btn = driver.find_element(By.XPATH, xpath)
+                            driver.execute_script("arguments[0].click();", btn)
+                            add_log(f"✅ Clicked button via: {xpath[:40]}...")
+                            btn_clicked = True
+                            break
+                        except:
+                            continue
+                    
+                    if not btn_clicked:
+                        add_log("⚠️ Could not find Get Number button", "WARN")
+                    
+                    time.sleep(3)
+                    
+                    # Alert handle
                     try:
-                        requests.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", timeout=10)
+                        alert = driver.switch_to.alert
+                        add_log(f"⚠️ Alert: {alert.text[:50]}")
+                        alert.accept()
                     except:
                         pass
                     
-                    # 🎯 ডায়নামিক রেঞ্জ
-                    live_range = ""
-                    try:
-                        range_data = requests.get(f"{API_BRIDGE_URL}?action=get_range&_t={current_time}", timeout=10).json()
-                        live_range = range_data.get('range', '')
-                        add_log(f"[*] Received range: {live_range}")
-                    except Exception as e:
-                        add_log(f"⚠️ Could not get range: {e}", "WARN")
+                    # Page reload
+                    add_log("🔄 Reloading page...")
+                    time.sleep(5)
+                    driver.get("http://mknetworkbd.com/getnum.php")
+                    time.sleep(8)
                     
-                    if live_range:
-                        try:
-                            range_xpaths = [
-                                "//input[@name='range']",
-                                "//input[@type='text']",
-                                "//input[contains(@placeholder, 'range')]",
-                                "//form//input[1]"
-                            ]
-                            range_input = try_multiple_xpaths(driver, range_xpaths, "range input")
-                            if range_input:
-                                range_input.clear()
-                                range_input.send_keys(live_range)
-                                add_log(f"✅ Range set to: {live_range}")
-                                time.sleep(1)
-                        except Exception as e:
-                            add_log(f"⚠️ Range input error: {e}", "WARN")
-
-                    # 🖱️ Get Number Click - 🆕 উন্নত XPath
-                    add_log("[*] Requesting 1 new number...")
+                    # Signal received confirmation
                     try:
-                        btn_xpaths = [
-                            "//button[contains(text(), 'Get Number')]",
-                            "//button[contains(text(), 'GET NUMBER')]",
-                            "//button[contains(text(), 'Get')]",
-                            "//button[contains(@class, 'btn') and contains(text(), 'Get')]",
-                            "//a[contains(text(), 'Get Number')]",
-                            "//input[@value='Get Number']",
-                            "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'get number')]",
-                            "//button[contains(@onclick, 'get')]"
-                        ]
-                        
-                        btn = try_multiple_xpaths(driver, btn_xpaths, "Get Number button")
-                        if btn:
-                            driver.execute_script("arguments[0].click();", btn)
-                            add_log("✅ Clicked Get Number button!")
-                            time.sleep(3)
-                        else:
-                            add_log("❌ Get Number button not found!", "ERROR")
-                        
-                        # 🟢 Alert Bypass
-                        try:
-                            alert = driver.switch_to.alert
-                            alert_text = alert.text
-                            add_log(f"⚠️ Alert detected: {alert_text[:50]}")
-                            alert.accept()
-                        except:
-                            pass
-                        
-                        add_log("[*] Waiting 5s then reloading page...")
-                        time.sleep(5)
-                        driver.get("http://mknetworkbd.com/getnum.php") 
-                        
-                        add_log("[*] Waiting 8s for table to load...")
-                        time.sleep(8)
-                        
-                        if "auth.php" in driver.current_url:
-                            add_log("⚠️ Logged out after reload! Re-login needed...")
-                            break
-                            
-                    except Exception as e:
-                        add_log(f"❌ Click/Reload error: {e}", "ERROR")
+                        requests.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", timeout=5)
+                    except:
+                        pass
                 
-                # 📊 টেবিল রিড করা - 🆕 উন্নত পার্সিং
-                add_log("[*] Reading table data...")
+                # 📊 Table পড়া
+                add_log("📊 Reading table...")
                 html = driver.page_source
                 
-                # 🆕 ডিবাগ: টেবিল কতগুলো row আছে
-                all_rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
-                add_log(f"[*] Found {len(all_rows)} table rows")
+                target_prefix = live_range.replace("X", "").replace("x", "") if live_range else ""
+                numbers = parse_table_rows(html, target_prefix)
                 
-                bulk_data = []
-                target_prefix = ""
-                if live_range:
-                    target_prefix = live_range.upper().replace("X", "")
-                    add_log(f"[*] Target prefix: {target_prefix}")
-
-                for idx, row in enumerate(all_rows):
-                    cols = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
-                    if len(cols) < 2:
-                        continue
-                    
-                    # 🆕 প্রথম column থেকে নম্বর বের করা
-                    raw_phone = re.sub(r'<[^>]+>', '', cols[0]).strip()
-                    phone_match = re.search(r'(\d{10,15})', raw_phone)
-                    
-                    if not phone_match:
-                        # 🆕 বিকল্প: লিংক থেকে নম্বর বের করা
-                        phone_match = re.search(r'(\d{10,15})', cols[0])
-                    
-                    if not phone_match:
-                        continue
-                    
-                    phone = phone_match.group(1)
-                    add_log(f"[*] Row {idx}: Found phone {phone}")
-
-                    # 🟢 Range Check
-                    if target_prefix and not phone.startswith(target_prefix):
-                        add_log(f"   -> Skipped (prefix mismatch)")
-                        continue
-
-                    # Status এবং OTP বের করা
-                    status_text = re.sub(r'<[^>]+>', '', cols[1]).strip() if len(cols) > 1 else ""
-                    otp = "N/A"
-                    
-                    # 🆕 আরও ভালো OTP pattern
-                    otp_patterns = [
-                        r'\b\d{4,6}\b',  # 4-6 digit OTP
-                        r'OTP[:\s]*(\d+)',
-                        r'Code[:\s]*(\d+)'
-                    ]
-                    for pattern in otp_patterns:
-                        otp_match = re.search(pattern, status_text, re.IGNORECASE)
-                        if otp_match:
-                            otp = otp_match.group(1) if otp_match.lastindex else otp_match.group(0)
-                            break
-
-                    net_status = "PENDING"
-                    if "SUCCESS" in status_text.upper() or otp != "N/A":
-                        net_status = "SUCCESS"
-                    elif any(x in status_text.upper() for x in ["CANCELED", "CANCELLED", "EXPIRED", "FAILED"]):
-                        net_status = "FAILED"
-
-                    bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
-                    add_log(f"✅ Valid number: {phone} | Status: {net_status} | OTP: {otp}")
-                    break  # প্রথম ভ্যালিড নম্বর নিয়েই ব্রেক
-
-                # 📤 ডাটাবেসে সেভ করা
-                if bulk_data:
-                    extracted_phone = bulk_data[0].get('phone')
-                    
-                    # 🟢 Duplicate Checker
-                    if extracted_phone == bot_state.get("last_synced_phone"):
-                        add_log(f"⚠️ Duplicate number detected: {extracted_phone} (waiting for new)")
-                    else:
-                        add_log(f"[*] Sending NEW number {extracted_phone} to Database...")
-                        try:
-                            db_res = requests.post(
-                                f"{API_BRIDGE_URL}?action=save_bulk_numbers", 
-                                json={"numbers": bulk_data}, 
-                                timeout=15
-                            )
-                            add_log(f"[*] DB Response Status: {db_res.status_code}")
-                            add_log(f"[*] DB Response Body: {db_res.text[:200]}")
-                            
-                            if db_res.status_code == 200:
-                                try:
-                                    resp_json = db_res.json()
-                                    add_log(f"✅ DB Response: {resp_json}")
-                                except:
-                                    add_log(f"✅ DB Response (text): {db_res.text[:100]}")
-                                bot_state["last_synced_phone"] = extracted_phone
-                            else:
-                                add_log(f"❌ DB Error: HTTP {db_res.status_code}", "ERROR")
-                                
-                            bot_state["status"] = f"🟢 Active | Last: {extracted_phone}"
-                        except Exception as e:
-                            add_log(f"❌ DB Connection Error: {e}", "ERROR")
+                # 📤 ডাটাবেসে পাঠানো
+                if numbers:
+                    for num_data in numbers:
+                        phone = num_data["phone"]
+                        
+                        # Duplicate check
+                        if phone == bot_state.get("last_synced_phone"):
+                            add_log(f"⏭️ Skipping duplicate: {phone}")
+                            continue
+                        
+                        # ডাটাবেসে পাঠানো
+                        success = send_to_database(
+                            phone,
+                            num_data["otp"],
+                            num_data["status"]
+                        )
+                        
+                        if success:
+                            bot_state["last_synced_phone"] = phone
+                            bot_state["total_synced"] += 1
+                            bot_state["status"] = f"🟢 Active | Last: {phone}"
+                            add_log(f"✅ SUCCESS: {phone} saved to DB!")
+                        else:
+                            add_log(f"❌ FAILED: {phone} not saved", "ERROR")
+                            bot_state["error_count"] += 1
+                        
+                        break  # প্রথম নম্বর নিয়েই ব্রেক
                 else:
-                    if signal == "GET":
-                        add_log("⚠️ No valid numbers found in table!")
-                        # 🆕 ডিবাগ ইনফো
-                        bot_state["debug_info"]["last_table_rows"] = len(all_rows)
-                        bot_state["debug_info"]["last_page_url"] = driver.current_url
+                    add_log("📭 No valid numbers in table")
                 
-                time.sleep(10) 
+                time.sleep(10)
                 
         except Exception as e:
-            add_log(f"❌ System Error: {e}", "ERROR")
-            import traceback
-            add_log(f"Traceback: {traceback.format_exc()[:300]}", "ERROR")
+            add_log(f"❌ Error: {e}", "ERROR")
+            bot_state["error_count"] += 1
         finally:
             if driver:
                 try:
                     driver.quit()
                 except:
                     pass
-            time.sleep(5) 
+            time.sleep(5)
 
+# Start background thread
 bot_thread = threading.Thread(target=background_loop, daemon=True)
 bot_thread.start()
 
@@ -384,20 +410,19 @@ bot_thread.start()
 def home():
     return jsonify(bot_state)
 
-@app.route('/debug')
-def debug():
-    """🆕 ডিবাগ এন্ডপয়েন্ট"""
+@app.route('/status')
+def status():
     return jsonify({
-        "state": bot_state,
-        "message": "Debug endpoint active"
+        "status": bot_state["status"],
+        "signal": bot_state["current_signal"],
+        "total_synced": bot_state["total_synced"],
+        "errors": bot_state["error_count"]
     })
 
 @app.route('/logs')
 def logs():
-    """🆕 শুধু লগ দেখার জন্য"""
     return jsonify({"logs": bot_state["action_logs"]})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
-    add_log(f"[*] Starting server on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port)
