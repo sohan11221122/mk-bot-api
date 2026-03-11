@@ -116,13 +116,15 @@ def background_loop():
                         btn = wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'get number')]")))
                         driver.execute_script("arguments[0].click();", btn)
                         
-                        # 🟢 5s Wait -> Refresh -> Auto Login Logic
+                        # 🟢 5s Wait -> Refresh -> 8s Wait for Table
                         add_log("[*] Waiting 5s then Refreshing page...")
                         time.sleep(5)
                         driver.refresh()
-                        time.sleep(4) # রিফ্রেশ লোড হওয়ার জন্য একটু সময়
                         
-                        # 🛡️ Auto-Login Check 2 (রিফ্রেশের পর লগআউট ধরবে)
+                        add_log("[*] Waiting 8s for table to load properly...")
+                        time.sleep(8)
+                        
+                        # 🛡️ Auto-Login Check 2 
                         if "auth.php" in driver.current_url:
                             add_log("⚠️ Logged out after refresh! Triggering Auto Re-Login...")
                             break
@@ -135,8 +137,8 @@ def background_loop():
                 rows = re.findall(r'<tr.*?>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
                 bulk_data = []
 
-                # 🟢 "1st e jai number asbe oita" - শুধু প্রথম ২টি সারি (যাতে পুরোনো নাম্বার না যায়)
-                for row in rows[:2]:
+                # 🟢 "rows[:5]" করা হয়েছে যাতে পেন্ডিং নাম্বার জমে থাকলেও সে মিস না করে
+                for row in rows[:5]:
                     cols = re.findall(r'<td.*?>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
                     if len(cols) >= 2:
                         raw_phone = re.sub(r'<.*?>', ' ', cols[0])
@@ -155,10 +157,23 @@ def background_loop():
 
                         bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
 
-                # 📤 ডাটাবেসে সেভ করা
+                # 📤 ডাটাবেসে সেভ করা (with Live Tracker)
                 if bulk_data:
-                    requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
-                    bot_state["status"] = f"🟢 Active | Last Synced: {bulk_data[0].get('phone')}..."
+                    add_log(f"[*] Found {len(bulk_data)} numbers in table! Sending to DB...")
+                    try:
+                        db_res = requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=15)
+                        if db_res.status_code == 200:
+                            add_log("✅ Successfully saved to Database!")
+                        else:
+                            add_log(f"❌ DB Blocked the request! HTTP Status: {db_res.status_code}")
+                            
+                        bot_state["status"] = f"🟢 Active | Last Synced: {bulk_data[0].get('phone')}..."
+                    except Exception as e:
+                        add_log(f"❌ Failed to connect to DB: {e}")
+                else:
+                    # 🟢 যদি নাম্বার না পায়, সেটা লগে দেখাবে
+                    if sig_req.status_code == 200 and sig_req.json().get("signal") == "GET":
+                         add_log("⚠️ No numbers found in the table after refresh!")
                 
                 time.sleep(10) 
                 
