@@ -20,7 +20,7 @@ PASSWORD = "Sohan123@@##"
 bot_state = {
     "status": "Initializing System...",
     "action_logs": [],
-    "last_synced_phone": "" # 🟢 একই নাম্বার ২ বার না পাঠানোর জন্য
+    "last_synced_phone": ""
 }
 
 def add_log(msg):
@@ -39,7 +39,7 @@ def create_driver():
     return webdriver.Chrome(options=options)
 
 def background_loop():
-    add_log("🚀 Background System Started (Bulletproof Version)!")
+    add_log("🚀 Background System Started (X-Ray Version)!")
     
     while True:
         driver = None
@@ -82,7 +82,6 @@ def background_loop():
             while True:
                 current_time = int(time.time())
                 
-                # 🛡️ Auto-Login Check 1
                 if "auth.php" in driver.current_url:
                     add_log("⚠️ Session Expired! Triggering Auto Re-Login...")
                     break 
@@ -93,11 +92,12 @@ def background_loop():
                     add_log("🔔 SIGNAL 'GET' RECEIVED!")
                     requests.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", timeout=10)
                     
-                    # 🎯 ডায়নামিক রেঞ্জ
+                    # 🎯 ডায়নামিক রেঞ্জ (Cleaned)
                     live_range = ""
                     try:
                         range_data = requests.get(f"{API_BRIDGE_URL}?action=get_range&_t={current_time}", timeout=10).json()
-                        live_range = range_data.get('range', '')
+                        # 🟢 স্পেস বা কোটেশন মুছে একদম ক্লিন রেঞ্জ বের করা
+                        live_range = range_data.get('range', '').replace('"', '').replace("'", "").strip()
                     except:
                         pass
                     
@@ -106,7 +106,7 @@ def background_loop():
                             range_input = driver.find_element(By.XPATH, "//input[@name='range' or @type='text']")
                             range_input.clear()
                             range_input.send_keys(live_range)
-                            add_log(f"[*] Range set to: {live_range}")
+                            add_log(f"[*] Clean Range set to: {live_range}")
                             time.sleep(1)
                         except:
                             pass
@@ -118,34 +118,32 @@ def background_loop():
                         driver.execute_script("arguments[0].click();", btn)
                         time.sleep(3)
                         
-                        # 🟢 Alert Bypass (যদি সাইট কোনো ওয়ার্নিং দেয়)
                         try:
                             driver.switch_to.alert.accept()
-                            add_log("⚠️ Closed annoying site alert popup.")
                         except:
                             pass
                         
-                        # 🟢 Hard Reload (Refresh এর বদলে)
-                        add_log("[*] Waiting 5s then HARD Reloading page...")
+                        # 🟢 Hard Reload এর বদলে Refresh দেওয়া হলো (যাতে টেবিল গায়েব না হয়)
+                        add_log("[*] Waiting 5s then Refreshing page...")
                         time.sleep(5)
-                        driver.get("http://mknetworkbd.com/getnum.php") 
+                        driver.refresh()
                         
                         add_log("[*] Waiting 8s for table to load properly...")
                         time.sleep(8)
                         
                         if "auth.php" in driver.current_url:
-                            add_log("⚠️ Logged out after reload! Triggering Auto Re-Login...")
+                            add_log("⚠️ Logged out after refresh! Auto Re-Login...")
                             break
                             
                     except Exception as e:
-                        add_log(f"   -> Click/Reload error: {e}")
+                        add_log(f"   -> Click/Refresh error: {e}")
                 
                 # 📊 টেবিল রিড করা
                 html = driver.page_source
                 rows = re.findall(r'<tr.*?>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
                 bulk_data = []
+                seen_phones = [] # 🟢 X-Ray: বট যা দেখবে তা এখানে সেভ হবে
 
-                # 🟢 STRICT RANGE GUARD: রেঞ্জ থেকে X সরিয়ে শুধু মেইন কোডটা (যেমন 221766) নেবে
                 target_prefix = ""
                 if live_range:
                     target_prefix = live_range.upper().replace("X", "")
@@ -157,8 +155,9 @@ def background_loop():
                         phone_match = re.search(r'(\d{10,15})', raw_phone)
                         if not phone_match: continue
                         phone = phone_match.group(1)
+                        
+                        seen_phones.append(phone) # X-Ray তে রেকর্ড করা হলো
 
-                        # 🟢 MAGIC CHECK: রেঞ্জের সাথে না মিললে এই নাম্বার ছুঁয়েও দেখবে না!
                         if target_prefix and not phone.startswith(target_prefix):
                             continue
 
@@ -172,17 +171,16 @@ def background_loop():
                         elif "CANCELED" in status_text.upper() or "EXPIRED" in status_text.upper(): net_status = "FAILED"
 
                         bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
-                        break # প্রথম সঠিক নাম্বারটা পেয়েই লুপ ভেঙে দেবে
+                        break # প্রথম সঠিক নাম্বার পেয়েই লুপ ব্রেক
 
                 # 📤 ডাটাবেসে সেভ করা
                 if bulk_data:
                     extracted_phone = bulk_data[0].get('phone')
                     
-                    # 🟢 Duplicate Checker: আগের নাম্বারটাই আবার পাঠাবে না
                     if extracted_phone == bot_state.get("last_synced_phone"):
                         add_log(f"⚠️ Waiting for a NEW number (Site still showing old: {extracted_phone})")
                     else:
-                        add_log(f"[*] Found STRICTLY NEW & VALID number ({extracted_phone})! Sending to DB...")
+                        add_log(f"[*] Found STRICTLY NEW number ({extracted_phone})! Sending to DB...")
                         try:
                             db_res = requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=15)
                             if db_res.status_code == 200:
@@ -196,7 +194,9 @@ def background_loop():
                             add_log(f"❌ Failed to connect to DB: {e}")
                 else:
                     if sig_req.status_code == 200 and sig_req.json().get("signal") == "GET":
-                         add_log("⚠️ No numbers matched the requested range!")
+                         # 🟢 X-Ray Report: ব্রাউজারে প্রিন্ট করবে বট আসলে কী নাম্বার দেখছে!
+                         seen_str = ", ".join(seen_phones[:4]) if seen_phones else "None (Table Empty)"
+                         add_log(f"⚠️ Target: {target_prefix} | Phones Seen by Bot: [{seen_str}]")
                 
                 time.sleep(10) 
                 
