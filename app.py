@@ -19,7 +19,8 @@ PASSWORD = "Sohan123@@##"
 # 🟢 লাইভ ড্যাশবোর্ড স্ট্যাটাস
 bot_state = {
     "status": "Initializing System...",
-    "action_logs": []
+    "action_logs": [],
+    "last_synced_phone": "" # 🟢 একই নাম্বার ২ বার না পাঠানোর জন্য
 }
 
 def add_log(msg):
@@ -38,7 +39,7 @@ def create_driver():
     return webdriver.Chrome(options=options)
 
 def background_loop():
-    add_log("🚀 Background System Started!")
+    add_log("🚀 Background System Started (Bulletproof Version)!")
     
     while True:
         driver = None
@@ -115,29 +116,40 @@ def background_loop():
                     try:
                         btn = wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'get number')]")))
                         driver.execute_script("arguments[0].click();", btn)
+                        time.sleep(3)
                         
-                        # 🟢 5s Wait -> Refresh -> 8s Wait for Table
-                        add_log("[*] Waiting 5s then Refreshing page...")
+                        # 🟢 Alert Bypass (যদি সাইট কোনো ওয়ার্নিং দেয়)
+                        try:
+                            driver.switch_to.alert.accept()
+                            add_log("⚠️ Closed annoying site alert popup.")
+                        except:
+                            pass
+                        
+                        # 🟢 Hard Reload (Refresh এর বদলে)
+                        add_log("[*] Waiting 5s then HARD Reloading page...")
                         time.sleep(5)
-                        driver.refresh()
+                        driver.get("http://mknetworkbd.com/getnum.php") 
                         
                         add_log("[*] Waiting 8s for table to load properly...")
                         time.sleep(8)
                         
-                        # 🛡️ Auto-Login Check 2 
                         if "auth.php" in driver.current_url:
-                            add_log("⚠️ Logged out after refresh! Triggering Auto Re-Login...")
+                            add_log("⚠️ Logged out after reload! Triggering Auto Re-Login...")
                             break
                             
                     except Exception as e:
-                        add_log(f"   -> Click/Refresh error: {e}")
+                        add_log(f"   -> Click/Reload error: {e}")
                 
                 # 📊 টেবিল রিড করা
                 html = driver.page_source
                 rows = re.findall(r'<tr.*?>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
                 bulk_data = []
 
-                # 🟢 Sniper Logic: শুধুমাত্র একদম ১ নম্বর (নতুন) সারিটাই পড়বে
+                # 🟢 STRICT RANGE GUARD: রেঞ্জ থেকে X সরিয়ে শুধু মেইন কোডটা (যেমন 221766) নেবে
+                target_prefix = ""
+                if live_range:
+                    target_prefix = live_range.upper().replace("X", "")
+
                 for row in rows:
                     cols = re.findall(r'<td.*?>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
                     if len(cols) >= 2:
@@ -145,6 +157,10 @@ def background_loop():
                         phone_match = re.search(r'(\d{10,15})', raw_phone)
                         if not phone_match: continue
                         phone = phone_match.group(1)
+
+                        # 🟢 MAGIC CHECK: রেঞ্জের সাথে না মিললে এই নাম্বার ছুঁয়েও দেখবে না!
+                        if target_prefix and not phone.startswith(target_prefix):
+                            continue
 
                         status_text = re.sub(r'<.*?>', ' ', cols[1]).strip()
                         otp = "N/A"
@@ -156,25 +172,31 @@ def background_loop():
                         elif "CANCELED" in status_text.upper() or "EXPIRED" in status_text.upper(): net_status = "FAILED"
 
                         bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
-                        
-                        break # 🟢 প্রথম ভ্যালিড নাম্বারটা পেয়ে গেলেই লুপ ভেঙে দেবে (পুরোনো নাম্বার আর পড়বে না)
+                        break # প্রথম সঠিক নাম্বারটা পেয়েই লুপ ভেঙে দেবে
 
-                # 📤 ডাটাবেসে সেভ করা (with Live Tracker)
+                # 📤 ডাটাবেসে সেভ করা
                 if bulk_data:
-                    add_log(f"[*] Found NEW number ({bulk_data[0].get('phone')})! Sending to DB...")
-                    try:
-                        db_res = requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=15)
-                        if db_res.status_code == 200:
-                            add_log("✅ Successfully saved to Database!")
-                        else:
-                            add_log(f"❌ DB Blocked the request! HTTP Status: {db_res.status_code}")
-                            
-                        bot_state["status"] = f"🟢 Active | Last Synced: {bulk_data[0].get('phone')}"
-                    except Exception as e:
-                        add_log(f"❌ Failed to connect to DB: {e}")
+                    extracted_phone = bulk_data[0].get('phone')
+                    
+                    # 🟢 Duplicate Checker: আগের নাম্বারটাই আবার পাঠাবে না
+                    if extracted_phone == bot_state.get("last_synced_phone"):
+                        add_log(f"⚠️ Waiting for a NEW number (Site still showing old: {extracted_phone})")
+                    else:
+                        add_log(f"[*] Found STRICTLY NEW & VALID number ({extracted_phone})! Sending to DB...")
+                        try:
+                            db_res = requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=15)
+                            if db_res.status_code == 200:
+                                add_log("✅ Successfully saved to Database!")
+                                bot_state["last_synced_phone"] = extracted_phone
+                            else:
+                                add_log(f"❌ DB Blocked the request! HTTP Status: {db_res.status_code}")
+                                
+                            bot_state["status"] = f"🟢 Active | Last Synced: {extracted_phone}"
+                        except Exception as e:
+                            add_log(f"❌ Failed to connect to DB: {e}")
                 else:
                     if sig_req.status_code == 200 and sig_req.json().get("signal") == "GET":
-                         add_log("⚠️ No valid numbers found in the table after refresh!")
+                         add_log("⚠️ No numbers matched the requested range!")
                 
                 time.sleep(10) 
                 
