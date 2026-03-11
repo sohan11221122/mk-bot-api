@@ -137,8 +137,8 @@ def background_loop():
                 rows = re.findall(r'<tr.*?>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
                 bulk_data = []
 
-                # 🟢 "rows[:5]" করা হয়েছে যাতে পেন্ডিং নাম্বার জমে থাকলেও সে মিস না করে
-                for row in rows[:5]:
+                # 🟢 Sniper Logic: শুধুমাত্র একদম ১ নম্বর (নতুন) সারিটাই পড়বে
+                for row in rows:
                     cols = re.findall(r'<td.*?>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
                     if len(cols) >= 2:
                         raw_phone = re.sub(r'<.*?>', ' ', cols[0])
@@ -156,10 +156,12 @@ def background_loop():
                         elif "CANCELED" in status_text.upper() or "EXPIRED" in status_text.upper(): net_status = "FAILED"
 
                         bulk_data.append({"phone": phone, "otp": otp, "status": net_status})
+                        
+                        break # 🟢 প্রথম ভ্যালিড নাম্বারটা পেয়ে গেলেই লুপ ভেঙে দেবে (পুরোনো নাম্বার আর পড়বে না)
 
                 # 📤 ডাটাবেসে সেভ করা (with Live Tracker)
                 if bulk_data:
-                    add_log(f"[*] Found {len(bulk_data)} numbers in table! Sending to DB...")
+                    add_log(f"[*] Found NEW number ({bulk_data[0].get('phone')})! Sending to DB...")
                     try:
                         db_res = requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=15)
                         if db_res.status_code == 200:
@@ -167,13 +169,12 @@ def background_loop():
                         else:
                             add_log(f"❌ DB Blocked the request! HTTP Status: {db_res.status_code}")
                             
-                        bot_state["status"] = f"🟢 Active | Last Synced: {bulk_data[0].get('phone')}..."
+                        bot_state["status"] = f"🟢 Active | Last Synced: {bulk_data[0].get('phone')}"
                     except Exception as e:
                         add_log(f"❌ Failed to connect to DB: {e}")
                 else:
-                    # 🟢 যদি নাম্বার না পায়, সেটা লগে দেখাবে
                     if sig_req.status_code == 200 and sig_req.json().get("signal") == "GET":
-                         add_log("⚠️ No numbers found in the table after refresh!")
+                         add_log("⚠️ No valid numbers found in the table after refresh!")
                 
                 time.sleep(10) 
                 
