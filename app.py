@@ -25,11 +25,10 @@ bot_state = {
 def add_log(msg):
     print(msg, flush=True)
     bot_state["action_logs"].insert(0, f"{time.strftime('%I:%M:%S %p')} - {msg}")
-    if len(bot_state["action_logs"]) > 15: # ড্যাশবোর্ডে শেষের ১৫টি লগ দেখাবে
+    if len(bot_state["action_logs"]) > 15:
         bot_state["action_logs"].pop()
 
 def create_driver():
-    """সার্ভারের জন্য হেডলেস (অদৃশ্য) ব্রাউজার তৈরি করা"""
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
@@ -41,7 +40,6 @@ def create_driver():
 def background_loop():
     add_log("🚀 Background System Started!")
     
-    # 🟢 Outer Loop: এটি ব্রাউজার ক্র্যাশ বা লগআউট হলে অটো-রিস্টার্ট করবে
     while True:
         driver = None
         try:
@@ -79,56 +77,66 @@ def background_loop():
             driver.get("http://mknetworkbd.com/getnum.php")
             time.sleep(3)
 
-            # --- ২. Main Monitor Loop (সিগন্যাল এবং নাম্বার চেক) ---
+            # --- ২. Main Monitor Loop ---
             while True:
                 current_time = int(time.time())
                 
-                # 🛡️ Auto-Login Check (লগআউট হয়ে গেলে লুপ ভেঙে নতুন করে লগইন করবে)
+                # 🛡️ Auto-Login Check 1
                 if "auth.php" in driver.current_url:
                     add_log("⚠️ Session Expired! Triggering Auto Re-Login...")
                     break 
                 
-                # 📡 সিগন্যাল চেক করা
                 sig_req = requests.get(f"{API_BRIDGE_URL}?action=check_signal&_t={current_time}", timeout=10)
                 
                 if sig_req.status_code == 200 and sig_req.json().get("signal") == "GET":
                     add_log("🔔 SIGNAL 'GET' RECEIVED!")
                     requests.get(f"{API_BRIDGE_URL}?action=signal_received&_t={current_time}", timeout=10)
                     
-                    # 🎯 Admin Panel থেকে ডায়নামিক রেঞ্জ আনা
+                    # 🎯 ডায়নামিক রেঞ্জ
                     live_range = ""
                     try:
                         range_data = requests.get(f"{API_BRIDGE_URL}?action=get_range&_t={current_time}", timeout=10).json()
                         live_range = range_data.get('range', '')
-                    except Exception as e:
-                        add_log(f"   -> API Range fetch error: {e}")
+                    except:
+                        pass
                     
-                    # 🎯 সাইটে রেঞ্জ বসানো
                     if live_range:
                         try:
                             range_input = driver.find_element(By.XPATH, "//input[@name='range' or @type='text']")
                             range_input.clear()
                             range_input.send_keys(live_range)
-                            add_log(f"[*] Range dynamically set to: {live_range}")
+                            add_log(f"[*] Range set to: {live_range}")
                             time.sleep(1)
                         except:
                             pass
 
-                    # 🖱️ ১ বার Get Number বাটনে ক্লিক করা
+                    # 🖱️ Get Number Click
                     add_log("[*] Requesting 1 new number...")
                     try:
                         btn = wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'get number')]")))
                         driver.execute_script("arguments[0].click();", btn)
-                        time.sleep(5) # নাম্বার আসার জন্য ৫ সেকেন্ড ওয়েট
+                        
+                        # 🟢 5s Wait -> Refresh -> Auto Login Logic
+                        add_log("[*] Waiting 5s then Refreshing page...")
+                        time.sleep(5)
+                        driver.refresh()
+                        time.sleep(4) # রিফ্রেশ লোড হওয়ার জন্য একটু সময়
+                        
+                        # 🛡️ Auto-Login Check 2 (রিফ্রেশের পর লগআউট ধরবে)
+                        if "auth.php" in driver.current_url:
+                            add_log("⚠️ Logged out after refresh! Triggering Auto Re-Login...")
+                            break
+                            
                     except Exception as e:
-                        add_log(f"   -> Click error: {e}")
+                        add_log(f"   -> Click/Refresh error: {e}")
                 
-                # 📊 টেবিল থেকে নাম্বার ও OTP পড়া
+                # 📊 টেবিল রিড করা
                 html = driver.page_source
                 rows = re.findall(r'<tr.*?>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
                 bulk_data = []
 
-                for row in rows[:8]:
+                # 🟢 "1st e jai number asbe oita" - শুধু প্রথম ২টি সারি (যাতে পুরোনো নাম্বার না যায়)
+                for row in rows[:2]:
                     cols = re.findall(r'<td.*?>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
                     if len(cols) >= 2:
                         raw_phone = re.sub(r'<.*?>', ' ', cols[0])
@@ -150,23 +158,20 @@ def background_loop():
                 # 📤 ডাটাবেসে সেভ করা
                 if bulk_data:
                     requests.post(f"{API_BRIDGE_URL}?action=save_bulk_numbers", json={"numbers": bulk_data}, timeout=10)
-                    bot_state["status"] = f"🟢 Active | Last Sync: {len(bulk_data)} numbers"
+                    bot_state["status"] = f"🟢 Active | Last Synced: {bulk_data[0].get('phone')}..."
                 
-                # লুপের গ্যাপ (হোস্টিংয়ের ওপর প্রেশার কমানোর জন্য)
                 time.sleep(10) 
                 
         except Exception as e:
             add_log(f"⚠️ System Error: {e}")
         finally:
             if driver:
-                driver.quit() # ক্র্যাশ করলে আগের ব্রাউজার ক্লোজ করে দেবে
-            time.sleep(5) # ৫ সেকেন্ড পর অটো রিস্টার্ট হবে
+                driver.quit() 
+            time.sleep(5) 
 
-# থ্রেড চালু করা
 bot_thread = threading.Thread(target=background_loop, daemon=True)
 bot_thread.start()
 
-# ওয়েব ড্যাশবোর্ড
 @app.route('/')
 def home():
     return jsonify(bot_state)
